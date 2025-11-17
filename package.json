@@ -2,10 +2,12 @@
   "name": "express-bercia-flow",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
     "discover": "dotenv -e .env -- ts-node src/scripts/discover.ts"
   },
   "keywords": [],

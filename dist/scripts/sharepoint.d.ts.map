@@ -1,0 +1,1 @@
+{"version":3,"file":"sharepoint.d.ts","sourceRoot":"","sources":["../../src/scripts/sharepoint.ts"],"names":[],"mappings":"AAGA,KAAK,mBAAmB,GAAG;IACzB,MAAM,EAAE,MAAM,CAAC;IACf,MAAM,EAAE,MAAM,CAAC;IACf,MAAM,EAAE,MAAM,CAAC,MAAM,EAAE,GAAG,CAAC,CAAC;CAC7B,CAAC;AAEF,wBAAsB,cAAc,CAAC,KAAK,EAAE,MAAM,EAAE,KAAK,EAAE,mBAAmB,gBAQ7E"}
