@@ -17,7 +17,7 @@ import {
 import { createListItem } from "./scripts/sharepoint";
 import { ensureFolderPath } from "./scripts/folders";
 import { createSubscription } from "./scripts/subscription";
-import { getSiteUserLookupId } from "./scripts/spUsers"; // 👈 NUEVO
+import { getSiteUserLookupId } from "./scripts/spUsers";
 
 /* ===================== Configuración & Utils ===================== */
 
@@ -77,10 +77,30 @@ function extractEmails(input: unknown): string[] {
   return Array.from(new Set(matches.map((e) => e.toLowerCase().trim())));
 }
 
+/**
+ * toCcBercia puede venir:
+ *  - string "a@x.cl; b@y.cl"
+ *  - array de objetos Outlook { emailAddress: { address } }
+ *  - array de strings
+ */
+function parseCc(input: unknown): string[] {
+  if (!input) return [];
+
+  // Caso array Outlook
+  if (Array.isArray(input)) {
+    const arr = input
+      .map((x: any) => x?.emailAddress?.address ?? x)
+      .filter(Boolean);
+    return extractEmails(arr.join(";"));
+  }
+
+  // Caso string
+  return extractEmails(String(input));
+}
+
 /* ===================== App ===================== */
 
 const app = express();
-// PA a veces manda content-types raros
 app.use(bodyParser.json({ type: "*/*", limit: "2mb" }));
 
 /* ========= Health ========= */
@@ -112,10 +132,10 @@ app.post("/api/intake/email", async (req, res) => {
     const {
       subject,
       from,
-      toCcBercia, // CC en texto
+      toCcBercia,
       bodyPreview,
       bodyHtml,
-      receivedDateTime, // opcional
+      receivedDateTime,
     } = req.body ?? {};
 
     const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
@@ -124,16 +144,20 @@ app.post("/api/intake/email", async (req, res) => {
     const prioridad = guessPrioridad(texto);
     const tipoTarea = guessTipoTarea(texto);
     const fechaSolicitada = extractFirstDateISO(bodyHtml || bodyPreview || "");
-    const clienteProyecto = extractClientProject(subject ?? "", bodyHtml || bodyPreview || "");
+    const clienteProyecto = extractClientProject(
+      subject ?? "",
+      bodyHtml || bodyPreview || ""
+    );
 
     // ====== Emails LIMPIOS ======
     const solicitanteEmail =
-      extractEmails(from)[0] ?? (typeof from === "string" ? from.trim().toLowerCase() : "");
+      extractEmails(from)[0] ??
+      (typeof from === "string" ? from.trim().toLowerCase() : "");
 
     // ========= Responsables desde CC, excluyendo admin =========
     const ADMIN_MAIL = "administrador@bercia.cl";
 
-    let responsablesArr = extractEmails(toCcBercia);
+    let responsablesArr = parseCc(toCcBercia);
     if (responsablesArr.length === 0) {
       const raw = String(toCcBercia ?? "").replace(/,/g, ";");
       responsablesArr = normalizeToCc(raw)
@@ -142,19 +166,20 @@ app.post("/api/intake/email", async (req, res) => {
         .filter(Boolean);
     }
 
-    // dedupe
     responsablesArr = Array.from(new Set(responsablesArr));
-
-    // ❗ sacar administrador si venía mezclado
     responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
 
-    // fallback solo si NO hubo CC reales
     if (responsablesArr.length === 0) {
       responsablesArr = [ADMIN_MAIL];
     }
 
-    // (Opcional) advertencia por dominio
-    if (BERCIA_DOMAIN && typeof from === "string" && BERCIA_DOMAIN.length > 2) {
+    // Warn dominio solo si viene from
+    if (
+      BERCIA_DOMAIN &&
+      typeof from === "string" &&
+      from.trim().length > 0 &&
+      BERCIA_DOMAIN.length > 2
+    ) {
       if (!from.toLowerCase().includes(BERCIA_DOMAIN.toLowerCase())) {
         console.warn(
           `[WARN] Remitente distinto de dominio esperado (${BERCIA_DOMAIN}):`,
@@ -172,62 +197,57 @@ app.post("/api/intake/email", async (req, res) => {
       // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
-    // Fecha solicitada (si viene en el correo)
     if (fechaSolicitada) {
       const iso = new Date(fechaSolicitada).toISOString();
       if (!isNaN(Date.parse(iso))) fields.Fechasolicitada = iso;
     }
 
-    // Choices
     const ESTADO_CHOICES = ["Pendiente", "En revisión", "Completado"] as const;
-    if (ESTADO_CHOICES.includes("Pendiente")) fields.Estadoderevisi_x00f3_n = "Pendiente";
+    fields.Estadoderevisi_x00f3_n = "Pendiente";
     if (PRIORIDAD_CHOICES.includes(prioridad as any)) fields.Prioridad = prioridad;
     if (TIPO_TAREA_CHOICES.includes(tipoTarea as any)) fields.Tipodetarea = tipoTarea;
 
-    /* ============================================================
-       BACKUP TEXTO (columnas antiguas)
-       - internal "Solicitante"  => display "SolicitanteEmail"
-       - internal "Responsable"  => display "ResponsablesEmail"
-    ============================================================ */
+    /* ================= BACKUP TEXTO ================= */
     if (solicitanteEmail) {
-      fields["Solicitante"] = solicitanteEmail;
+      fields["Solicitante"] = solicitanteEmail; // SolicitanteEmail (texto)
     }
-    fields["Responsable"] = responsablesArr.join(";");
+    fields["Responsable"] = responsablesArr.join(";"); // ResponsablesEmail (texto)
 
-    /* ============================================================
-       PEOPLE REAL usando LookupId (para contacto / foto)
-       - internal "Solicitante0LookupId" => display "Solicitante"
-       - internal "ResponsablesLookupId" => display "Responsables"
-    ============================================================ */
-
-    // Solicitante People single
-    if (solicitanteEmail) {
-      const solicitanteId = await getSiteUserLookupId(
-        token,
-        SITE_ID!,
-        solicitanteEmail
-      );
-      if (solicitanteId) {
-        fields["Solicitante0LookupId"] = solicitanteId;
-      } else {
-        console.warn("No LookupId solicitante:", solicitanteEmail);
+    /* ================= PEOPLE por LookupId =================
+       Si lookup falla (permiso/usuario no existe), NO rompe el flujo.
+    ========================================================= */
+    try {
+      if (solicitanteEmail) {
+        const solicitanteId = await getSiteUserLookupId(
+          token,
+          SITE_ID!,
+          solicitanteEmail
+        );
+        if (solicitanteId) {
+          fields["Solicitante0LookupId"] = solicitanteId;
+        } else {
+          console.warn("No LookupId solicitante:", solicitanteEmail);
+        }
       }
-    }
 
-    // Responsables People multi
-    if (responsablesArr.length > 0) {
-      const ids = await Promise.all(
-        responsablesArr.map((mail) => getSiteUserLookupId(token, SITE_ID!, mail))
-      );
-      const responsablesIds = ids.filter(
-        (x): x is number => typeof x === "number"
-      );
+      if (responsablesArr.length > 0) {
+        const ids = await Promise.all(
+          responsablesArr.map((mail) =>
+            getSiteUserLookupId(token, SITE_ID!, mail)
+          )
+        );
+        const responsablesIds = ids.filter(
+          (x): x is number => typeof x === "number"
+        );
 
-      if (responsablesIds.length > 0) {
-        fields["ResponsablesLookupId"] = responsablesIds;
-      } else {
-        console.warn("No LookupId responsables:", responsablesArr);
+        if (responsablesIds.length > 0) {
+          fields["ResponsablesLookupId"] = responsablesIds;
+        } else {
+          console.warn("No LookupId responsables:", responsablesArr);
+        }
       }
+    } catch (err: any) {
+      console.warn("Lookup People falló, se creará solo con texto:", err?.response?.data || err);
     }
 
     console.log("INTAKE responsables:", { toCcBercia, responsablesArr });
@@ -254,13 +274,22 @@ app.post("/api/intake/email", async (req, res) => {
       finishedAt: new Date().toISOString(),
     });
   } catch (e: any) {
-    const payload = e?.response?.data ?? e?.message ?? String(e);
-    console.error("intake error:", payload);
-    return res.status(500).json({ error: payload });
+    const status = e?.response?.status;
+    const data = e?.response?.data;
+    const msg = e?.message;
+
+    console.error("intake error status:", status);
+    console.error("intake error data:", data);
+    console.error("intake error msg:", msg);
+
+    return res.status(500).json({
+      error: data || msg || String(e),
+      status,
+    });
   }
 });
 
-/* ========= Webhook Graph (opcional, para suscripciones) ========= */
+/* ========= Webhook Graph (opcional) ========= */
 
 app.get("/api/graph/webhook", (req, res) => {
   const token = req.query.validationToken as string | undefined;

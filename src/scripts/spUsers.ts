@@ -1,10 +1,6 @@
 import axios from "axios";
 
-export async function getSiteUserLookupId(
-  token: string,
-  siteId: string,
-  email: string
-): Promise<number | null> {
+export async function getSiteUserLookupId(token: string, siteId: string, email: string) {
   const safe = email.toLowerCase().trim();
 
   const r = await axios.get(
