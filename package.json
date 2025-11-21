@@ -2,13 +2,19 @@
   "name": "express-bercia-flow",
   "version": "1.0.0",
   "description": "",
-  "main": "src/server.ts",
+  "main": "dist/server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
+
     "build": "tsc",
-    "start": "tsx src/server.ts",
-    "discover": "dotenv -e .env -- ts-node src/scripts/discover.ts"
+
+    "start": "node dist/server.js",
+
+    "discover": "dotenv -e .env -- ts-node src/scripts/discover.ts",
+    "list-columns": "dotenv -e .env -- ts-node src/scripts/list-columns.ts",
+    "print-token": "dotenv -e .env -- ts-node src/scripts/print-token.ts"
   },
   "keywords": [],
   "author": "",
@@ -17,8 +23,7 @@
     "@azure/msal-node": "^3.8.1",
     "axios": "^1.13.2",
     "body-parser": "^2.2.0",
-    "express": "^5.1.0",
-    "tsx": "^4.20.6"
+    "express": "^5.1.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",
@@ -26,6 +31,7 @@
     "dotenv-cli": "^11.0.0",
     "nodemon": "^3.1.10",
     "ts-node": "^10.9.2",
+    "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }
 }
