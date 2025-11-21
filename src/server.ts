@@ -129,10 +129,11 @@ app.post("/api/intake/email", async (req, res) => {
     const solicitanteEmail =
       extractEmails(from)[0] ?? (typeof from === "string" ? from.trim().toLowerCase() : "");
 
-    // Preferimos extraer por regex (acepta comas/; y “Nombre <mail>”)
+    // ========= Responsables desde CC, excluyendo admin =========
+    const ADMIN_MAIL = "administrador@bercia.cl";
+
     let responsablesArr = extractEmails(toCcBercia);
     if (responsablesArr.length === 0) {
-      // Si PA te lo manda como “a,b,c” o con ; mezclados
       const raw = String(toCcBercia ?? "").replace(/,/g, ";");
       responsablesArr = normalizeToCc(raw)
         .split(";")
@@ -140,9 +141,15 @@ app.post("/api/intake/email", async (req, res) => {
         .filter(Boolean);
     }
 
-    // Fallback obligatorio: centro de correo siempre como responsable principal
+    // dedupe
+    responsablesArr = Array.from(new Set(responsablesArr));
+
+    // ❗ sacar administrador si venía mezclado
+    responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
+
+    // fallback solo si NO hubo CC reales
     if (responsablesArr.length === 0) {
-      responsablesArr = ["administrador@bercia.cl"];
+      responsablesArr = [ADMIN_MAIL];
     }
 
     // (Opcional) advertencia por dominio
@@ -152,7 +159,7 @@ app.post("/api/intake/email", async (req, res) => {
       }
     }
 
-    // 4) Construir payload
+    // 4) Construir payload base
     const fields: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPreview || "", 1800),
@@ -174,23 +181,25 @@ app.post("/api/intake/email", async (req, res) => {
     if (PRIORIDAD_CHOICES.includes(prioridad as any)) fields.Prioridad = prioridad;
     if (TIPO_TAREA_CHOICES.includes(tipoTarea as any)) fields.Tipodetarea = tipoTarea;
 
-    // ====== Campos Persona (SharePoint People) vía Graph ======
-    // Solicitante: single person (UPN/email)
+    // ====== BACKUP TEXTO (columnas antiguas) ======
     if (solicitanteEmail) {
-      fields["Solicitante@odata.type"] = "String";
-      fields["Solicitante"] = solicitanteEmail;
+      fields["Solicitante"] = solicitanteEmail; // texto -> displayName: SolicitanteEmail
+    }
+    fields["Responsable"] = responsablesArr.join(";"); // texto -> displayName: ResponsablesEmail
+
+    // ====== PEOPLE REAL (columnas nuevas) ======
+
+    // Solicitante People (single) -> internal name: Solicitante0
+    if (solicitanteEmail) {
+      fields["Solicitante0@odata.type"] = "String";
+      fields["Solicitante0"] = solicitanteEmail;
     }
 
-    // Responsable: por ahora single (toma el primero). Si configuras la columna como múltiple, usa el bloque de abajo.
+    // Responsables People (multi) -> internal name: Responsables
     if (responsablesArr.length > 0) {
-      fields["Responsable@odata.type"] = "String";
-      fields["Responsable"] = responsablesArr[0];
+      fields["Responsables@odata.type"] = "Collection(Edm.String)";
+      fields["Responsables"] = responsablesArr;
     }
-    // === Si cambias “Responsable” a MÚLTIPLE en SharePoint, usa esto en su lugar:
-    // if (responsablesArr.length > 1) {
-    //   fields["Responsable@odata.type"] = "Collection(Edm.String)";
-    //   fields["Responsable"] = responsablesArr;
-    // }
 
     console.log("INTAKE responsables:", { toCcBercia, responsablesArr });
 
