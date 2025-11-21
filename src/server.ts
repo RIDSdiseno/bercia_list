@@ -17,6 +17,7 @@ import {
 import { createListItem } from "./scripts/sharepoint";
 import { ensureFolderPath } from "./scripts/folders";
 import { createSubscription } from "./scripts/subscription";
+import { getSiteUserLookupId } from "./scripts/spUsers"; // 👈 NUEVO
 
 /* ===================== Configuración & Utils ===================== */
 
@@ -111,7 +112,7 @@ app.post("/api/intake/email", async (req, res) => {
     const {
       subject,
       from,
-      toCcBercia, // puede venir con comas, ; o “Nombre <correo>”
+      toCcBercia, // CC en texto
       bodyPreview,
       bodyHtml,
       receivedDateTime, // opcional
@@ -155,7 +156,10 @@ app.post("/api/intake/email", async (req, res) => {
     // (Opcional) advertencia por dominio
     if (BERCIA_DOMAIN && typeof from === "string" && BERCIA_DOMAIN.length > 2) {
       if (!from.toLowerCase().includes(BERCIA_DOMAIN.toLowerCase())) {
-        console.warn(`[WARN] Remitente distinto de dominio esperado (${BERCIA_DOMAIN}):`, from);
+        console.warn(
+          `[WARN] Remitente distinto de dominio esperado (${BERCIA_DOMAIN}):`,
+          from
+        );
       }
     }
 
@@ -165,7 +169,6 @@ app.post("/api/intake/email", async (req, res) => {
       Observaciones: truncate(bodyPreview || "", 1800),
       Notificado: Boolean(from),
       Cliente_x002f_Proyecto: clienteProyecto ?? "",
-      // Si necesitas guardar la fecha de recepción original:
       // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
@@ -181,29 +184,59 @@ app.post("/api/intake/email", async (req, res) => {
     if (PRIORIDAD_CHOICES.includes(prioridad as any)) fields.Prioridad = prioridad;
     if (TIPO_TAREA_CHOICES.includes(tipoTarea as any)) fields.Tipodetarea = tipoTarea;
 
-    // ====== BACKUP TEXTO (columnas antiguas) ======
+    /* ============================================================
+       BACKUP TEXTO (columnas antiguas)
+       - internal "Solicitante"  => display "SolicitanteEmail"
+       - internal "Responsable"  => display "ResponsablesEmail"
+    ============================================================ */
     if (solicitanteEmail) {
-      fields["Solicitante"] = solicitanteEmail; // texto -> displayName: SolicitanteEmail
+      fields["Solicitante"] = solicitanteEmail;
     }
-    fields["Responsable"] = responsablesArr.join(";"); // texto -> displayName: ResponsablesEmail
+    fields["Responsable"] = responsablesArr.join(";");
 
-    // ====== PEOPLE REAL (columnas nuevas) ======
+    /* ============================================================
+       PEOPLE REAL usando LookupId (para contacto / foto)
+       - internal "Solicitante0LookupId" => display "Solicitante"
+       - internal "ResponsablesLookupId" => display "Responsables"
+    ============================================================ */
 
-    // Solicitante People (single) -> internal name: Solicitante0
+    // Solicitante People single
     if (solicitanteEmail) {
-      fields["Solicitante0@odata.type"] = "String";
-      fields["Solicitante0"] = solicitanteEmail;
+      const solicitanteId = await getSiteUserLookupId(
+        token,
+        SITE_ID!,
+        solicitanteEmail
+      );
+      if (solicitanteId) {
+        fields["Solicitante0LookupId"] = solicitanteId;
+      } else {
+        console.warn("No LookupId solicitante:", solicitanteEmail);
+      }
     }
 
-    // Responsables People (multi) -> internal name: Responsables
+    // Responsables People multi
     if (responsablesArr.length > 0) {
-      fields["Responsables@odata.type"] = "Collection(Edm.String)";
-      fields["Responsables"] = responsablesArr;
+      const ids = await Promise.all(
+        responsablesArr.map((mail) => getSiteUserLookupId(token, SITE_ID!, mail))
+      );
+      const responsablesIds = ids.filter(
+        (x): x is number => typeof x === "number"
+      );
+
+      if (responsablesIds.length > 0) {
+        fields["ResponsablesLookupId"] = responsablesIds;
+      } else {
+        console.warn("No LookupId responsables:", responsablesArr);
+      }
     }
 
     console.log("INTAKE responsables:", { toCcBercia, responsablesArr });
 
-    await createListItem(token, { siteId: SITE_ID!, listId: LIST_ID!, fields });
+    await createListItem(token, {
+      siteId: SITE_ID!,
+      listId: LIST_ID!,
+      fields,
+    });
 
     // 5) Notificación opcional al solicitante
     if (from) {
@@ -215,7 +248,11 @@ app.post("/api/intake/email", async (req, res) => {
       );
     }
 
-    return res.json({ ok: true, startedAt, finishedAt: new Date().toISOString() });
+    return res.json({
+      ok: true,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    });
   } catch (e: any) {
     const payload = e?.response?.data ?? e?.message ?? String(e);
     console.error("intake error:", payload);
@@ -232,12 +269,13 @@ app.get("/api/graph/webhook", (req, res) => {
 });
 
 app.post("/api/graph/webhook", async (req, res) => {
-  const validationToken = (req.query as any)?.validationToken as string | undefined;
+  const validationToken = (req.query as any)?.validationToken as
+    | string
+    | undefined;
   if (validationToken) {
     return res.status(200).type("text/plain").send(validationToken);
   }
   res.sendStatus(202);
-  // TODO: procesar notificaciones de Graph aquí si vuelves al modo webhook
 });
 
 /* ========= Crear suscripciones (Inbox + carpeta objetivo) ========= */
@@ -250,7 +288,11 @@ app.post("/api/graph/subscribe", async (_req, res) => {
     requireWebhookBase();
 
     const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
-    const folderId = await ensureFolderPath(token, MAILBOX_USER_ID!, TARGET_FOLDER_PATH!);
+    const folderId = await ensureFolderPath(
+      token,
+      MAILBOX_USER_ID!,
+      TARGET_FOLDER_PATH!
+    );
 
     const subs: any[] = [];
     subs.push(
