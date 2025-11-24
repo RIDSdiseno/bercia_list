@@ -1,6 +1,14 @@
 // src/scripts/spUsers.ts
 import axios from "axios";
 
+function toClaimsLogin(emailOrUpn: string) {
+  const t = (emailOrUpn || "").toLowerCase().trim();
+  if (!t) return t;
+  // si ya viene en formato claims, lo dejamos
+  if (t.startsWith("i:0#.")) return t;
+  return `i:0#.f|membership|${t}`;
+}
+
 /**
  * Busca/asegura un usuario en el sitio SharePoint y devuelve su LookupId numérico.
  *
@@ -22,39 +30,35 @@ export async function getSiteUserLookupId(
     { headers: { Authorization: `Bearer ${graphToken}` } }
   );
 
-  let webUrl: string | undefined = siteRes.data?.webUrl;
+  const webUrl: string | undefined = siteRes.data?.webUrl;
   if (!webUrl) throw new Error("No pude obtener webUrl del sitio.");
 
-  // normaliza sin slash final
-  webUrl = webUrl.replace(/\/$/, "");
-
-  // Headers para SharePoint REST (audience SP)
+  // Headers SP REST
   const spHeaders = {
     Authorization: `Bearer ${spToken}`,
     Accept: "application/json;odata=nometadata",
     "Content-Type": "application/json;odata=nometadata",
   };
 
-  async function listUsers(): Promise<any[]> {
+  async function listUsers() {
     const usersRes = await axios.get(
-      `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName,Title`,
+      `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName`,
       { headers: spHeaders }
     );
     return usersRes.data?.value ?? [];
   }
 
   function findMatch(users: any[]) {
-    const t = target.toLowerCase();
     return users.find((u: any) => {
-      const email = String(u.Email || "").toLowerCase();
-      const upn = String(u.UserPrincipalName || "").toLowerCase();
-      const login = String(u.LoginName || "").toLowerCase();
+      const email = (u.Email || "").toLowerCase();
+      const upn = (u.UserPrincipalName || "").toLowerCase();
+      const login = (u.LoginName || "").toLowerCase();
 
       return (
-        email === t ||
-        upn === t ||
-        login.includes(`|${t}`) ||  // i:0#.f|membership|user@dominio
-        login.endsWith(t)
+        email === target ||
+        upn === target ||
+        login.includes(target) ||
+        login.endsWith(target)
       );
     });
   }
@@ -65,21 +69,16 @@ export async function getSiteUserLookupId(
 
   // 3) Si NO existe, asegurar usuario en el sitio
   if (!match) {
-    const claimsLogin = `i:0#.f|membership|${target}`;
+    const claims = toClaimsLogin(target);
 
     try {
       await axios.post(
         `${webUrl}/_api/web/ensureuser`,
-        { logonName: claimsLogin },
+        { logonName: claims },
         { headers: spHeaders }
       );
     } catch (e: any) {
-      console.warn(
-        "ensureuser falló para:",
-        claimsLogin,
-        e?.response?.status,
-        e?.response?.data || e
-      );
+      console.warn("ensureuser falló para:", claims, e?.response?.data || e);
     }
 
     // 4) Reintentar búsqueda
