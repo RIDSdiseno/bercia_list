@@ -138,6 +138,10 @@ function cleanFields(fields: Record<string, any>) {
   return out;
 }
 
+function isJwt(t: string) {
+  return typeof t === "string" && t.split(".").length >= 3;
+}
+
 /**
  * Trae columnas reales de la lista (internal names).
  */
@@ -226,31 +230,31 @@ app.post("/api/intake/email", async (req, res) => {
       receivedDateTime: _receivedDateTime, // noUnusedLocals safe
     } = req.body ?? {};
 
-    // ✅ dos tokens
+    // 4) Tokens
     const graphToken = await getAppToken(
       TENANT_ID!,
       CLIENT_ID!,
       CLIENT_SECRET!
     );
-    const spToken = await getSharePointToken(
-      TENANT_ID!,
-      CLIENT_ID!,
-      CLIENT_SECRET!,
-      SHAREPOINT_HOST!
-    );
 
-    // ====== DEBUG tokens (si no es JWT, cortamos acá) ======
-    const jwtParts = (t: string) => (typeof t === "string" ? t.split(".").length : 0);
+    let spToken = "";
+    try {
+      spToken = await getSharePointToken(
+        TENANT_ID!,
+        CLIENT_ID!,
+        CLIENT_SECRET!,
+        SHAREPOINT_HOST!
+      );
+    } catch (e: any) {
+      console.warn("No pude obtener spToken, sigo con texto:", e?.response?.data || e);
+    }
 
     console.log("TOKENS DEBUG:", {
-      graphParts: jwtParts(graphToken),
-      spParts: jwtParts(spToken),
-      graphPrefix: graphToken.slice(0, 25),
-      spPrefix: spToken.slice(0, 25),
+      graphJwt: isJwt(graphToken),
+      spJwt: isJwt(spToken),
+      graphPrefix: graphToken.slice(0, 20),
+      spPrefix: spToken.slice(0, 20),
     });
-
-    if (jwtParts(graphToken) < 3) throw new Error("graphToken NO es JWT válido");
-    if (jwtParts(spToken) < 3) throw new Error("spToken NO es JWT válido");
 
     const bodyHtmlText = String(bodyHtml || "");
     const bodyPreviewText = String(bodyPreview || "");
@@ -309,7 +313,16 @@ app.post("/api/intake/email", async (req, res) => {
       );
     }
 
-    // 4) fields base
+    // 5) columnas reales
+    const columns = await getListColumns(graphToken, SITE_ID!, LIST_ID!);
+    const names = new Set(columns.map((c) => c.name));
+
+    console.log(
+      "COLUMNAS REALES:",
+      columns.map((c) => `${c.name} (${c.displayName})`)
+    );
+
+    // 6) fields base
     const fieldsRaw: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPlain || bodyPreviewText || "", 1800),
@@ -336,75 +349,63 @@ app.post("/api/intake/email", async (req, res) => {
     }
 
     /* ================= PEOPLE por LookupId ================= */
-    try {
-      if (solicitanteEmail) {
-        const solicitanteId = await getSiteUserLookupId(
-          graphToken,
-          spToken,
-          SITE_ID!,
-          solicitanteEmail
-        );
-        if (solicitanteId) fieldsRaw["Solicitante0LookupId"] = solicitanteId;
-      }
-
-      if (responsablesArr.length > 0) {
-        const ids = await Promise.all(
-          responsablesArr.map((mail) =>
-            getSiteUserLookupId(graphToken, spToken, SITE_ID!, mail)
-          )
-        );
-
-        const responsablesIds = ids.filter(
-          (x): x is number => Number.isFinite(x as number)
-        );
-
-        if (responsablesIds.length > 0) {
-          fieldsRaw["ResponsablesLookupId"] = responsablesIds;
+    if (isJwt(spToken)) {
+      try {
+        // Solo si existe la columna base persona
+        if (solicitanteEmail && names.has("Solicitante0")) {
+          const solicitanteId = await getSiteUserLookupId(
+            graphToken,
+            spToken,
+            SITE_ID!,
+            solicitanteEmail
+          );
+          if (solicitanteId) fieldsRaw["Solicitante0LookupId"] = solicitanteId;
         }
+
+        if (responsablesArr.length > 0 && names.has("Responsables")) {
+          const ids = await Promise.all(
+            responsablesArr.map((mail) =>
+              getSiteUserLookupId(graphToken, spToken, SITE_ID!, mail)
+            )
+          );
+
+          const responsablesIds = ids.filter(
+            (x): x is number => Number.isFinite(x as number)
+          );
+
+          if (responsablesIds.length > 0) {
+            fieldsRaw["ResponsablesLookupId"] = responsablesIds;
+          }
+        }
+      } catch (e: any) {
+        console.warn(
+          "Lookup People falló, se creará solo con texto:",
+          e?.response?.status,
+          e?.response?.data || e
+        );
       }
-    } catch (e: any) {
-      console.error("FALLÓ Lookup People", e?.response?.status, e?.response?.data || e);
+    } else {
+      console.warn("spToken no válido, salto lookup people.");
     }
 
     const fieldsClean = cleanFields(fieldsRaw);
+    const fieldsSanitized = sanitizeFieldsByColumns(fieldsClean, columns);
 
     console.log("INTAKE responsables:", {
       toCcBercia,
       responsablesArr,
       desdeBody: parseResponsablesFromBody(bodyHtmlText || bodyPreviewText),
     });
-
-    // 5) columnas reales (aislado)
-    let columns: any[] = [];
-    try {
-      columns = await getListColumns(graphToken, SITE_ID!, LIST_ID!);
-    } catch (e: any) {
-      console.error("FALLÓ getListColumns", e?.response?.status, e?.response?.data || e);
-      throw e;
-    }
-
-    console.log(
-      "COLUMNAS REALES:",
-      columns.map((c) => `${c.name} (${c.displayName})`)
-    );
-
-    const fieldsSanitized = sanitizeFieldsByColumns(fieldsClean, columns);
-
     console.log("FIELDS SANITIZADOS:", JSON.stringify(fieldsSanitized, null, 2));
 
-    // 6) create item (aislado)
-    try {
-      await createListItem(graphToken, {
-        siteId: SITE_ID!,
-        listId: LIST_ID!,
-        fields: fieldsSanitized,
-      });
-    } catch (e: any) {
-      console.error("FALLÓ createListItem", e?.response?.status, e?.response?.data || e);
-      throw e;
-    }
+    // 7) create item
+    await createListItem(graphToken, {
+      siteId: SITE_ID!,
+      listId: LIST_ID!,
+      fields: fieldsSanitized,
+    });
 
-    // 7) confirmación
+    // 8) confirmación
     if (solicitanteEmail) {
       await sendConfirmationEmail(
         graphToken,
@@ -505,3 +506,4 @@ app.listen(Number(PORT), "0.0.0.0", () => {
 });
 
 export default app;
+
