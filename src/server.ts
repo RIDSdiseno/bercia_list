@@ -34,7 +34,7 @@ const {
   TARGET_FOLDER_PATH = "Prueba-Flujo-list",
   BERCIA_DOMAIN = "@bercia.cl",
   PA_SHARED_KEY,
-  SHAREPOINT_HOST, // 👈 NUEVO (ej: berciacrm.sharepoint.com)
+  SHAREPOINT_HOST, // ej: berciacrm.sharepoint.com
 } = process.env as Record<string, string | undefined>;
 
 function requireEnv(vars: Array<[string, string | undefined]>) {
@@ -57,7 +57,7 @@ function requireSharePointBase() {
     ["SITE_ID", SITE_ID],
     ["LIST_ID", LIST_ID],
     ["MAILBOX_USER_ID", MAILBOX_USER_ID],
-    ["SHAREPOINT_HOST", SHAREPOINT_HOST], // 👈 necesario para el token SP
+    ["SHAREPOINT_HOST", SHAREPOINT_HOST],
   ]);
 }
 function requireWebhookBase() {
@@ -82,7 +82,7 @@ function extractEmails(input: unknown): string[] {
 
 /**
  * COMBATE HTML:
- * Convierte bodyHtml a texto plano para poder parsear "Responsables:" bien.
+ * Convierte bodyHtml a texto plano.
  */
 function stripHtml(input: string) {
   return input
@@ -98,7 +98,7 @@ function stripHtml(input: string) {
 /**
  * toCcBercia puede venir:
  *  - string "a@x.cl; b@y.cl"
- *  - array de objetos Outlook { emailAddress: { address } }
+ *  - array Outlook { emailAddress: { address } }
  *  - array de strings
  */
 function parseCc(input: unknown): string[] {
@@ -115,9 +115,8 @@ function parseCc(input: unknown): string[] {
 }
 
 /**
- * Lee responsables desde el body (HTML o preview):
- * Ej: "Responsables: a@x.com; b@y.com"
- * Devuelve SOLO correos reales.
+ * Lee responsables desde el body:
+ * "Responsables: a@x.com; b@y.com"
  */
 function parseResponsablesFromBody(bodyHtmlOrPreview: string): string[] {
   const plain = stripHtml(bodyHtmlOrPreview);
@@ -127,7 +126,7 @@ function parseResponsablesFromBody(bodyHtmlOrPreview: string): string[] {
 }
 
 /**
- * Limpia fields para evitar enviar undefined/null a Graph.
+ * Limpia fields para evitar undefined/null a Graph.
  */
 function cleanFields(fields: Record<string, any>) {
   const out: Record<string, any> = {};
@@ -158,8 +157,7 @@ async function getListColumns(token: string, siteId: string, listId: string) {
 
 /**
  * Deja pasar solo columnas reales.
- * ✅ PERO también deja pasar variantes LookupId
- *    si existe la columna base (ej Responsables → ResponsablesLookupId).
+ * + deja pasar XxxLookupId si existe la base Xxx
  */
 function sanitizeFieldsByColumns(
   fields: Record<string, any>,
@@ -200,7 +198,7 @@ app.get("/api/graph/health", (_req, res) =>
   res.json({ ok: true, mailbox: MAILBOX_USER_ID, site: SITE_ID, list: LIST_ID })
 );
 
-/* ========= Intake (Power Automate / Postman → SharePoint) ========= */
+/* ========= Intake ========= */
 
 app.post("/api/intake/email", async (req, res) => {
   const startedAt = new Date().toISOString();
@@ -225,7 +223,7 @@ app.post("/api/intake/email", async (req, res) => {
       toCcBercia,
       bodyPreview,
       bodyHtml,
-      receivedDateTime,
+      receivedDateTime: _receivedDateTime, // noUnusedLocals safe
     } = req.body ?? {};
 
     // ✅ dos tokens
@@ -240,6 +238,19 @@ app.post("/api/intake/email", async (req, res) => {
       CLIENT_SECRET!,
       SHAREPOINT_HOST!
     );
+
+    // ====== DEBUG tokens (si no es JWT, cortamos acá) ======
+    const jwtParts = (t: string) => (typeof t === "string" ? t.split(".").length : 0);
+
+    console.log("TOKENS DEBUG:", {
+      graphParts: jwtParts(graphToken),
+      spParts: jwtParts(spToken),
+      graphPrefix: graphToken.slice(0, 25),
+      spPrefix: spToken.slice(0, 25),
+    });
+
+    if (jwtParts(graphToken) < 3) throw new Error("graphToken NO es JWT válido");
+    if (jwtParts(spToken) < 3) throw new Error("spToken NO es JWT válido");
 
     const bodyHtmlText = String(bodyHtml || "");
     const bodyPreviewText = String(bodyPreview || "");
@@ -260,9 +271,7 @@ app.post("/api/intake/email", async (req, res) => {
     // ========= Responsables =========
     const ADMIN_MAIL = "administrador@bercia.cl";
 
-    let responsablesArr = parseResponsablesFromBody(
-      bodyHtmlText || bodyPreviewText
-    );
+    let responsablesArr = parseResponsablesFromBody(bodyHtmlText || bodyPreviewText);
 
     if (responsablesArr.length === 0) {
       responsablesArr = parseCc(toCcBercia);
@@ -286,20 +295,21 @@ app.post("/api/intake/email", async (req, res) => {
       responsablesArr = [ADMIN_MAIL];
     }
 
+    // Warn dominio
     if (
       BERCIA_DOMAIN &&
       typeof from === "string" &&
       from.trim().length > 0 &&
-      BERCIA_DOMAIN.length > 2
+      BERCIA_DOMAIN.length > 2 &&
+      !from.toLowerCase().includes(BERCIA_DOMAIN.toLowerCase())
     ) {
-      if (!from.toLowerCase().includes(BERCIA_DOMAIN.toLowerCase())) {
-        console.warn(
-          `[WARN] Remitente distinto de dominio esperado (${BERCIA_DOMAIN}):`,
-          from
-        );
-      }
+      console.warn(
+        `[WARN] Remitente distinto de dominio esperado (${BERCIA_DOMAIN}):`,
+        from
+      );
     }
 
+    // 4) fields base
     const fieldsRaw: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPlain || bodyPreviewText || "", 1800),
@@ -315,6 +325,7 @@ app.post("/api/intake/email", async (req, res) => {
         ? tipoTarea
         : undefined,
 
+      // Backup texto
       Solicitante: solicitanteEmail || undefined,
       Responsable: responsablesArr.join(";"),
     };
@@ -326,17 +337,14 @@ app.post("/api/intake/email", async (req, res) => {
 
     /* ================= PEOPLE por LookupId ================= */
     try {
-      // 👇 OJO: ahora pasamos spToken (audience SharePoint)
       if (solicitanteEmail) {
         const solicitanteId = await getSiteUserLookupId(
-          graphToken, // para webUrl (Graph)
-          spToken,    // para siteusers/ensureuser (SP REST)
+          graphToken,
+          spToken,
           SITE_ID!,
           solicitanteEmail
         );
-        if (solicitanteId) {
-          fieldsRaw["Solicitante0LookupId"] = solicitanteId;
-        }
+        if (solicitanteId) fieldsRaw["Solicitante0LookupId"] = solicitanteId;
       }
 
       if (responsablesArr.length > 0) {
@@ -354,11 +362,8 @@ app.post("/api/intake/email", async (req, res) => {
           fieldsRaw["ResponsablesLookupId"] = responsablesIds;
         }
       }
-    } catch (err: any) {
-      console.warn(
-        "Lookup People falló, se creará solo con texto:",
-        err?.response?.data || err
-      );
+    } catch (e: any) {
+      console.error("FALLÓ Lookup People", e?.response?.status, e?.response?.data || e);
     }
 
     const fieldsClean = cleanFields(fieldsRaw);
@@ -369,7 +374,14 @@ app.post("/api/intake/email", async (req, res) => {
       desdeBody: parseResponsablesFromBody(bodyHtmlText || bodyPreviewText),
     });
 
-    const columns = await getListColumns(graphToken, SITE_ID!, LIST_ID!);
+    // 5) columnas reales (aislado)
+    let columns: any[] = [];
+    try {
+      columns = await getListColumns(graphToken, SITE_ID!, LIST_ID!);
+    } catch (e: any) {
+      console.error("FALLÓ getListColumns", e?.response?.status, e?.response?.data || e);
+      throw e;
+    }
 
     console.log(
       "COLUMNAS REALES:",
@@ -380,12 +392,19 @@ app.post("/api/intake/email", async (req, res) => {
 
     console.log("FIELDS SANITIZADOS:", JSON.stringify(fieldsSanitized, null, 2));
 
-    await createListItem(graphToken, {
-      siteId: SITE_ID!,
-      listId: LIST_ID!,
-      fields: fieldsSanitized,
-    });
+    // 6) create item (aislado)
+    try {
+      await createListItem(graphToken, {
+        siteId: SITE_ID!,
+        listId: LIST_ID!,
+        fields: fieldsSanitized,
+      });
+    } catch (e: any) {
+      console.error("FALLÓ createListItem", e?.response?.status, e?.response?.data || e);
+      throw e;
+    }
 
+    // 7) confirmación
     if (solicitanteEmail) {
       await sendConfirmationEmail(
         graphToken,
@@ -434,7 +453,7 @@ app.post("/api/graph/webhook", async (req, res) => {
   res.sendStatus(202);
 });
 
-/* ========= Crear suscripciones (Inbox + carpeta objetivo) ========= */
+/* ========= Crear suscripciones ========= */
 
 app.post("/api/graph/subscribe", async (_req, res) => {
   try {
