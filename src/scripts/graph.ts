@@ -21,7 +21,16 @@ export async function getAppToken(
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 
-  return data.access_token as string;
+  const token = data?.access_token;
+
+  // ✅ validación fuerte para evitar Bearer undefined / tokens malos
+  if (!token || typeof token !== "string" || token.split(".").length < 3) {
+    throw new Error(
+      `No pude obtener token Graph. Respuesta: ${JSON.stringify(data)}`
+    );
+  }
+
+  return token;
 }
 
 /**
@@ -46,7 +55,16 @@ export async function getSharePointToken(
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 
-  return data.access_token as string;
+  const token = data?.access_token;
+
+  // ✅ validación fuerte para evitar Bearer undefined / tokens malos
+  if (!token || typeof token !== "string" || token.split(".").length < 3) {
+    throw new Error(
+      `No pude obtener token SharePoint. Respuesta: ${JSON.stringify(data)}`
+    );
+  }
+
+  return token;
 }
 
 /* =========================================================
@@ -63,6 +81,10 @@ export async function gget<T = any>(
   url: string,
   config: AxiosRequestConfig = {}
 ) {
+  if (!token || token.split(".").length < 3) {
+    throw new Error(`gget recibió token inválido para ${url}`);
+  }
+
   const finalUrl = url.startsWith("http")
     ? url
     : `https://graph.microsoft.com/v1.0${url.startsWith("/") ? "" : "/"}${url}`;
@@ -87,6 +109,10 @@ export async function gpost<T = any>(
   body?: any,
   config: AxiosRequestConfig = {}
 ) {
+  if (!token || token.split(".").length < 3) {
+    throw new Error(`gpost recibió token inválido para ${url}`);
+  }
+
   const finalUrl = url.startsWith("http")
     ? url
     : `https://graph.microsoft.com/v1.0${url.startsWith("/") ? "" : "/"}${url}`;
