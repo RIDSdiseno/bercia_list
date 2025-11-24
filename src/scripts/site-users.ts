@@ -15,15 +15,34 @@ function need(name: string, v?: string) {
 
   const token = await getAppToken(TENANT_ID, CLIENT_ID, CLIENT_SECRET);
 
-  const r = await axios.get(
-    `https://graph.microsoft.com/v1.0/sites/${SITE_ID}/users?$select=id,displayName,mail,userPrincipalName`,
-    { headers: { Authorization: `Bearer ${token}` } }
+  // 1) Obtener webUrl real del sitio (esto sí existe en Graph)
+  const siteRes = await axios.get(
+    `https://graph.microsoft.com/v1.0/sites/${SITE_ID}?$select=webUrl`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    }
   );
 
-  console.log("id\tmail\tuserPrincipalName\tdisplayName");
-  for (const u of r.data.value) {
+  const webUrl: string | undefined = siteRes.data?.webUrl;
+  if (!webUrl) throw new Error("No pude obtener webUrl del sitio con Graph.");
+
+  // 2) Listar usuarios del sitio con SharePoint REST
+  const usersRes = await axios.get(
+    `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName,Title`,
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json;odata=nometadata",
+      },
+    }
+  );
+
+  const users = usersRes.data?.value ?? [];
+
+  console.log("Id\tEmail\tUserPrincipalName\tLoginName\tTitle");
+  for (const u of users) {
     console.log(
-      `${u.id}\t${u.mail || ""}\t${u.userPrincipalName || ""}\t${u.displayName || ""}`
+      `${u.Id}\t${u.Email || ""}\t${u.UserPrincipalName || ""}\t${u.LoginName || ""}\t${u.Title || ""}`
     );
   }
 })();
