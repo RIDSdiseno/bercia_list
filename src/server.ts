@@ -109,10 +109,23 @@ function parseResponsablesFromBody(body: string): string[] {
 
   return m[1]
     .split(/[;,]/)
-    .map(s => s.trim().toLowerCase())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
 }
 
+/**
+ * Limpia fields para evitar enviar undefined/null a Graph.
+ * (Graph es quisquilloso y a veces devuelve 400 genérico.)
+ */
+function cleanFields(fields: Record<string, any>) {
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 /* ===================== App ===================== */
 
@@ -131,6 +144,7 @@ app.get("/api/graph/health", (_req, res) =>
 
 app.post("/api/intake/email", async (req, res) => {
   const startedAt = new Date().toISOString();
+
   try {
     // 1) Seguridad header
     requirePAKey();
@@ -196,6 +210,7 @@ app.post("/api/intake/email", async (req, res) => {
       responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
     }
 
+    // Fallback final
     if (responsablesArr.length === 0) {
       responsablesArr = [ADMIN_MAIL];
     }
@@ -216,27 +231,31 @@ app.post("/api/intake/email", async (req, res) => {
     }
 
     // 4) Construir payload base
-    const fields: Record<string, any> = {
+    const fieldsRaw: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPreview || "", 1800),
       Notificado: Boolean(solicitanteEmail),
+
+      // OJO: estos nombres deben existir como "internal name"
       Cliente_x002f_Proyecto: clienteProyecto ?? "",
+      Estadoderevisi_x00f3_n: "Pendiente",
+
+      // Choice (solo si calza con opciones reales)
+      Prioridad: PRIORIDAD_CHOICES.includes(prioridad as any) ? prioridad : undefined,
+      Tipodetarea: TIPO_TAREA_CHOICES.includes(tipoTarea as any) ? tipoTarea : undefined,
+
+      // Backup texto
+      Solicitante: solicitanteEmail || undefined,
+      Responsable: responsablesArr.join(";"),
+
+      // Si algún día quieres guardar receivedDateTime con internal name real:
+      // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
     if (fechaSolicitada) {
       const iso = new Date(fechaSolicitada).toISOString();
-      if (!isNaN(Date.parse(iso))) fields.Fechasolicitada = iso;
+      if (!isNaN(Date.parse(iso))) fieldsRaw.Fechasolicitada = iso;
     }
-
-    fields.Estadoderevisi_x00f3_n = "Pendiente";
-    if (PRIORIDAD_CHOICES.includes(prioridad as any)) fields.Prioridad = prioridad;
-    if (TIPO_TAREA_CHOICES.includes(tipoTarea as any)) fields.Tipodetarea = tipoTarea;
-
-    /* ================= BACKUP TEXTO ================= */
-    if (solicitanteEmail) {
-      fields["Solicitante"] = solicitanteEmail; // texto
-    }
-    fields["Responsable"] = responsablesArr.join(";"); // texto
 
     /* ================= PEOPLE por LookupId ================= */
     try {
@@ -248,8 +267,7 @@ app.post("/api/intake/email", async (req, res) => {
           solicitanteEmail
         );
         if (solicitanteId) {
-          // internal name real de tu columna persona de solicitante
-          fields["Solicitante0LookupId"] = solicitanteId;
+          fieldsRaw["Solicitante0LookupId"] = solicitanteId;
         } else {
           console.warn("No LookupId solicitante:", solicitanteEmail);
         }
@@ -268,8 +286,7 @@ app.post("/api/intake/email", async (req, res) => {
         );
 
         if (responsablesIds.length > 0) {
-          // internal name real de tu columna persona multi de responsables
-          fields["ResponsablesLookupId"] = responsablesIds;
+          fieldsRaw["ResponsablesLookupId"] = responsablesIds;
         } else {
           console.warn("No LookupId responsables:", responsablesArr);
         }
@@ -281,19 +298,55 @@ app.post("/api/intake/email", async (req, res) => {
       );
     }
 
+    // Limpieza final
+    const fields = cleanFields(fieldsRaw);
+
     console.log("INTAKE responsables:", {
       toCcBercia,
       responsablesArr,
       desdeBody: parseResponsablesFromBody(bodyText),
     });
 
-    await createListItem(token, {
-      siteId: SITE_ID!,
-      listId: LIST_ID!,
-      fields,
-    });
+    console.log("FIELDS A ENVIAR:", JSON.stringify(fields, null, 2));
 
-    // 5) Notificación opcional al solicitante
+    // 5) Crear item en SharePoint (Graph)
+    try {
+      await createListItem(token, {
+        siteId: SITE_ID!,
+        listId: LIST_ID!,
+        fields,
+      });
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const data = e?.response?.data;
+
+      // Retry mínimo automático si Graph devuelve 400 invalidRequest
+      if (status === 400) {
+        console.warn(
+          "[RETRY-MINIMO] Graph 400 invalidRequest. Reintentando con campos mínimos."
+        );
+
+        const minimalFields = cleanFields({
+          Title: fields.Title,
+          Observaciones: fields.Observaciones,
+          Solicitante: fields.Solicitante,
+          Responsable: fields.Responsable,
+        });
+
+        console.log("FIELDS MINIMOS:", JSON.stringify(minimalFields, null, 2));
+
+        await createListItem(token, {
+          siteId: SITE_ID!,
+          listId: LIST_ID!,
+          fields: minimalFields,
+        });
+      } else {
+        console.error("createListItem error:", data || e?.message || e);
+        throw e;
+      }
+    }
+
+    // 6) Notificación opcional al solicitante
     if (solicitanteEmail) {
       await sendConfirmationEmail(
         token,
@@ -309,7 +362,7 @@ app.post("/api/intake/email", async (req, res) => {
       finishedAt: new Date().toISOString(),
     });
   } catch (e: any) {
-    const status = e?.response?.status;
+    const status = e?.response?.status || 500;
     const data = e?.response?.data;
     const msg = e?.message;
 
@@ -317,7 +370,7 @@ app.post("/api/intake/email", async (req, res) => {
     console.error("intake error data:", data);
     console.error("intake error msg:", msg);
 
-    return res.status(500).json({
+    return res.status(status).json({
       error: data || msg || String(e),
       status,
     });
