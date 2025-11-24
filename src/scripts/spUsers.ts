@@ -22,8 +22,11 @@ export async function getSiteUserLookupId(
     { headers: { Authorization: `Bearer ${graphToken}` } }
   );
 
-  const webUrl: string | undefined = siteRes.data?.webUrl;
+  let webUrl: string | undefined = siteRes.data?.webUrl;
   if (!webUrl) throw new Error("No pude obtener webUrl del sitio.");
+
+  // normaliza sin slash final
+  webUrl = webUrl.replace(/\/$/, "");
 
   // Headers para SharePoint REST (audience SP)
   const spHeaders = {
@@ -32,25 +35,26 @@ export async function getSiteUserLookupId(
     "Content-Type": "application/json;odata=nometadata",
   };
 
-  async function listUsers() {
+  async function listUsers(): Promise<any[]> {
     const usersRes = await axios.get(
-      `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName`,
+      `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName,Title`,
       { headers: spHeaders }
     );
     return usersRes.data?.value ?? [];
   }
 
   function findMatch(users: any[]) {
+    const t = target.toLowerCase();
     return users.find((u: any) => {
-      const email = (u.Email || "").toLowerCase();
-      const upn = (u.UserPrincipalName || "").toLowerCase();
-      const login = (u.LoginName || "").toLowerCase();
+      const email = String(u.Email || "").toLowerCase();
+      const upn = String(u.UserPrincipalName || "").toLowerCase();
+      const login = String(u.LoginName || "").toLowerCase();
 
       return (
-        email === target ||
-        upn === target ||
-        login.includes(target) || // i:0#.f|membership|user@dominio
-        login.endsWith(target)
+        email === t ||
+        upn === t ||
+        login.includes(`|${t}`) ||  // i:0#.f|membership|user@dominio
+        login.endsWith(t)
       );
     });
   }
@@ -61,14 +65,21 @@ export async function getSiteUserLookupId(
 
   // 3) Si NO existe, asegurar usuario en el sitio
   if (!match) {
+    const claimsLogin = `i:0#.f|membership|${target}`;
+
     try {
       await axios.post(
         `${webUrl}/_api/web/ensureuser`,
-        { logonName: target },
+        { logonName: claimsLogin },
         { headers: spHeaders }
       );
     } catch (e: any) {
-      console.warn("ensureuser falló para:", target, e?.response?.data || e);
+      console.warn(
+        "ensureuser falló para:",
+        claimsLogin,
+        e?.response?.status,
+        e?.response?.data || e
+      );
     }
 
     // 4) Reintentar búsqueda
