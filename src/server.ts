@@ -4,7 +4,7 @@ import express from "express";
 import bodyParser from "body-parser";
 import axios from "axios";
 
-import { getAppToken } from "./scripts/graph";
+import { getAppToken, getSharePointToken } from "./scripts/graph";
 import {
   guessPrioridad,
   guessTipoTarea,
@@ -34,6 +34,7 @@ const {
   TARGET_FOLDER_PATH = "Prueba-Flujo-list",
   BERCIA_DOMAIN = "@bercia.cl",
   PA_SHARED_KEY,
+  SHAREPOINT_HOST, // 👈 NUEVO (ej: berciacrm.sharepoint.com)
 } = process.env as Record<string, string | undefined>;
 
 function requireEnv(vars: Array<[string, string | undefined]>) {
@@ -56,6 +57,7 @@ function requireSharePointBase() {
     ["SITE_ID", SITE_ID],
     ["LIST_ID", LIST_ID],
     ["MAILBOX_USER_ID", MAILBOX_USER_ID],
+    ["SHAREPOINT_HOST", SHAREPOINT_HOST], // 👈 necesario para el token SP
   ]);
 }
 function requireWebhookBase() {
@@ -226,7 +228,18 @@ app.post("/api/intake/email", async (req, res) => {
       receivedDateTime,
     } = req.body ?? {};
 
-    const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
+    // ✅ dos tokens
+    const graphToken = await getAppToken(
+      TENANT_ID!,
+      CLIENT_ID!,
+      CLIENT_SECRET!
+    );
+    const spToken = await getSharePointToken(
+      TENANT_ID!,
+      CLIENT_ID!,
+      CLIENT_SECRET!,
+      SHAREPOINT_HOST!
+    );
 
     const bodyHtmlText = String(bodyHtml || "");
     const bodyPreviewText = String(bodyPreview || "");
@@ -247,10 +260,10 @@ app.post("/api/intake/email", async (req, res) => {
     // ========= Responsables =========
     const ADMIN_MAIL = "administrador@bercia.cl";
 
-    // 1) Primero intenta desde body (limpio)
-    let responsablesArr = parseResponsablesFromBody(bodyHtmlText || bodyPreviewText);
+    let responsablesArr = parseResponsablesFromBody(
+      bodyHtmlText || bodyPreviewText
+    );
 
-    // 2) Si no venían en body, usa To+CC del flujo (toCcBercia)
     if (responsablesArr.length === 0) {
       responsablesArr = parseCc(toCcBercia);
 
@@ -263,20 +276,16 @@ app.post("/api/intake/email", async (req, res) => {
       }
     }
 
-    // Limpieza + únicos
     responsablesArr = Array.from(new Set(responsablesArr));
 
-    // Excluir admin si hay más de uno
     if (responsablesArr.length > 1) {
       responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
     }
 
-    // Fallback final
     if (responsablesArr.length === 0) {
       responsablesArr = [ADMIN_MAIL];
     }
 
-    // Warn dominio solo si viene from
     if (
       BERCIA_DOMAIN &&
       typeof from === "string" &&
@@ -291,7 +300,6 @@ app.post("/api/intake/email", async (req, res) => {
       }
     }
 
-    // 4) Construir payload base
     const fieldsRaw: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPlain || bodyPreviewText || "", 1800),
@@ -309,8 +317,6 @@ app.post("/api/intake/email", async (req, res) => {
 
       Solicitante: solicitanteEmail || undefined,
       Responsable: responsablesArr.join(";"),
-
-      // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
     if (fechaSolicitada) {
@@ -320,9 +326,11 @@ app.post("/api/intake/email", async (req, res) => {
 
     /* ================= PEOPLE por LookupId ================= */
     try {
+      // 👇 OJO: ahora pasamos spToken (audience SharePoint)
       if (solicitanteEmail) {
         const solicitanteId = await getSiteUserLookupId(
-          token,
+          graphToken, // para webUrl (Graph)
+          spToken,    // para siteusers/ensureuser (SP REST)
           SITE_ID!,
           solicitanteEmail
         );
@@ -334,7 +342,7 @@ app.post("/api/intake/email", async (req, res) => {
       if (responsablesArr.length > 0) {
         const ids = await Promise.all(
           responsablesArr.map((mail) =>
-            getSiteUserLookupId(token, SITE_ID!, mail)
+            getSiteUserLookupId(graphToken, spToken, SITE_ID!, mail)
           )
         );
 
@@ -361,8 +369,7 @@ app.post("/api/intake/email", async (req, res) => {
       desdeBody: parseResponsablesFromBody(bodyHtmlText || bodyPreviewText),
     });
 
-    // 5) Traer columnas reales + sanitizar
-    const columns = await getListColumns(token, SITE_ID!, LIST_ID!);
+    const columns = await getListColumns(graphToken, SITE_ID!, LIST_ID!);
 
     console.log(
       "COLUMNAS REALES:",
@@ -373,17 +380,15 @@ app.post("/api/intake/email", async (req, res) => {
 
     console.log("FIELDS SANITIZADOS:", JSON.stringify(fieldsSanitized, null, 2));
 
-    // 6) Crear item en SharePoint (Graph)
-    await createListItem(token, {
+    await createListItem(graphToken, {
       siteId: SITE_ID!,
       listId: LIST_ID!,
       fields: fieldsSanitized,
     });
 
-    // 7) Notificación opcional al solicitante
     if (solicitanteEmail) {
       await sendConfirmationEmail(
-        token,
+        graphToken,
         MAILBOX_USER_ID!,
         solicitanteEmail,
         subject ?? "(sin asunto)"
@@ -438,9 +443,14 @@ app.post("/api/graph/subscribe", async (_req, res) => {
     requireSharePointBase();
     requireWebhookBase();
 
-    const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
+    const graphToken = await getAppToken(
+      TENANT_ID!,
+      CLIENT_ID!,
+      CLIENT_SECRET!
+    );
+
     const folderId = await ensureFolderPath(
-      token,
+      graphToken,
       MAILBOX_USER_ID!,
       TARGET_FOLDER_PATH!
     );
@@ -448,14 +458,14 @@ app.post("/api/graph/subscribe", async (_req, res) => {
     const subs: any[] = [];
     subs.push(
       await createSubscription(
-        token,
+        graphToken,
         `/users/${MAILBOX_USER_ID}/mailFolders('inbox')/messages`,
         WEBHOOK_URL!
       )
     );
     subs.push(
       await createSubscription(
-        token,
+        graphToken,
         `/users/${MAILBOX_USER_ID}/mailFolders/${folderId}/messages`,
         WEBHOOK_URL!
       )

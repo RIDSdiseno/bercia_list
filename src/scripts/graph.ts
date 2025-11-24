@@ -1,25 +1,44 @@
+// src/scripts/graph.ts
 import axios from "axios";
-import * as qs from "querystring";
 
-const tokenUrl = (tenant: string) =>
-  `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`;
+export async function getAppToken(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string
+) {
+  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
 
-export async function getAppToken(tenantId: string, clientId: string, clientSecret: string) {
-  const data = qs.stringify({
-    client_id: clientId,
-    client_secret: clientSecret,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-  const res = await axios.post(tokenUrl(tenantId), data, {
+  const body = new URLSearchParams();
+  body.set("client_id", clientId);
+  body.set("client_secret", clientSecret);
+  body.set("grant_type", "client_credentials");
+  body.set("scope", "https://graph.microsoft.com/.default");
+
+  const { data } = await axios.post(url, body.toString(), {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
-  return res.data.access_token as string;
+
+  return data.access_token as string;
 }
 
-export async function gget(url: string, token: string) {
-  return axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
-}
-export async function gpost(url: string, token: string, body: any) {
-  return axios.post(url, body, { headers: { Authorization: `Bearer ${token}` } });
+// ✅ NUEVO: token para SharePoint REST
+export async function getSharePointToken(
+  tenantId: string,
+  clientId: string,
+  clientSecret: string,
+  sharepointHost: string // ej: "berciacrm.sharepoint.com"
+) {
+  const url = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`;
+
+  const body = new URLSearchParams();
+  body.set("client_id", clientId);
+  body.set("client_secret", clientSecret);
+  body.set("grant_type", "client_credentials");
+  body.set("scope", `https://${sharepointHost}/.default`);
+
+  const { data } = await axios.post(url, body.toString(), {
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+
+  return data.access_token as string;
 }
