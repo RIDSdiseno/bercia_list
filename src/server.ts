@@ -79,6 +79,21 @@ function extractEmails(input: unknown): string[] {
 }
 
 /**
+ * COMBATE HTML:
+ * Convierte bodyHtml a texto plano para poder parsear "Responsables:" bien.
+ */
+function stripHtml(input: string) {
+  return input
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<\/(div|p|br|li|tr|td|th|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * toCcBercia puede venir:
  *  - string "a@x.cl; b@y.cl"
  *  - array de objetos Outlook { emailAddress: { address } }
@@ -87,7 +102,6 @@ function extractEmails(input: unknown): string[] {
 function parseCc(input: unknown): string[] {
   if (!input) return [];
 
-  // Caso array Outlook
   if (Array.isArray(input)) {
     const arr = input
       .map((x: any) => x?.emailAddress?.address ?? x)
@@ -95,23 +109,19 @@ function parseCc(input: unknown): string[] {
     return extractEmails(arr.join(";"));
   }
 
-  // Caso string
   return extractEmails(String(input));
 }
 
 /**
- * Lee responsables desde el body del correo:
+ * Lee responsables desde el body (HTML o preview):
  * Ej: "Responsables: a@x.com; b@y.com"
- * Si no encuentra la línea, devuelve [].
+ * Devuelve SOLO correos reales.
  */
-function parseResponsablesFromBody(body: string): string[] {
-  const m = body.match(/Responsables\s*:\s*(.+)/i);
+function parseResponsablesFromBody(bodyHtmlOrPreview: string): string[] {
+  const plain = stripHtml(bodyHtmlOrPreview);
+  const m = plain.match(/Responsables\s*:\s*(.+)/i);
   if (!m?.[1]) return [];
-
-  return m[1]
-    .split(/[;,]/)
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+  return extractEmails(m[1]);
 }
 
 /**
@@ -129,7 +139,6 @@ function cleanFields(fields: Record<string, any>) {
 
 /**
  * Trae columnas reales de la lista (internal names).
- * Esto evita 400 por nombres inventados o en desuso.
  */
 async function getListColumns(token: string, siteId: string, listId: string) {
   const { data } = await axios.get(
@@ -146,7 +155,9 @@ async function getListColumns(token: string, siteId: string, listId: string) {
 }
 
 /**
- * Deja solo los fields que EXISTEN en la lista (por internal name) y no son hidden/readonly.
+ * Deja pasar solo columnas reales.
+ * ✅ PERO también deja pasar variantes LookupId
+ *    si existe la columna base (ej Responsables → ResponsablesLookupId).
  */
 function sanitizeFieldsByColumns(
   fields: Record<string, any>,
@@ -160,9 +171,15 @@ function sanitizeFieldsByColumns(
 
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(fields)) {
-    if (!allowed.has(k)) continue;
+    const isAllowedExact = allowed.has(k);
+
+    const base = k.endsWith("LookupId") ? k.slice(0, -8) : null;
+    const isAllowedLookup = base ? allowed.has(base) : false;
+
+    if (!isAllowedExact && !isAllowedLookup) continue;
     if (v === undefined || v === null) continue;
     if (Array.isArray(v) && v.length === 0) continue;
+
     out[k] = v;
   }
   return out;
@@ -211,13 +228,16 @@ app.post("/api/intake/email", async (req, res) => {
 
     const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
 
-    const bodyText = String(bodyHtml || bodyPreview || "");
-    const texto = `${subject ?? ""}\n${bodyText}`;
+    const bodyHtmlText = String(bodyHtml || "");
+    const bodyPreviewText = String(bodyPreview || "");
+    const bodyPlain = stripHtml(bodyHtmlText || bodyPreviewText);
+
+    const texto = `${subject ?? ""}\n${bodyPlain}`;
 
     const prioridad = guessPrioridad(texto);
     const tipoTarea = guessTipoTarea(texto);
-    const fechaSolicitada = extractFirstDateISO(bodyText);
-    const clienteProyecto = extractClientProject(subject ?? "", bodyText);
+    const fechaSolicitada = extractFirstDateISO(bodyPlain);
+    const clienteProyecto = extractClientProject(subject ?? "", bodyPlain);
 
     // ====== Solicitante email limpio ======
     const solicitanteEmail =
@@ -227,8 +247,8 @@ app.post("/api/intake/email", async (req, res) => {
     // ========= Responsables =========
     const ADMIN_MAIL = "administrador@bercia.cl";
 
-    // 1) Primero intenta desde body
-    let responsablesArr = parseResponsablesFromBody(bodyText);
+    // 1) Primero intenta desde body (limpio)
+    let responsablesArr = parseResponsablesFromBody(bodyHtmlText || bodyPreviewText);
 
     // 2) Si no venían en body, usa To+CC del flujo (toCcBercia)
     if (responsablesArr.length === 0) {
@@ -274,10 +294,9 @@ app.post("/api/intake/email", async (req, res) => {
     // 4) Construir payload base
     const fieldsRaw: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
-      Observaciones: truncate(bodyPreview || "", 1800),
+      Observaciones: truncate(bodyPlain || bodyPreviewText || "", 1800),
       Notificado: Boolean(solicitanteEmail),
 
-      // ⚠️ estos nombres se filtran por columnas reales abajo
       Cliente_x002f_Proyecto: clienteProyecto ?? "",
       Estadoderevisi_x00f3_n: "Pendiente",
 
@@ -334,13 +353,12 @@ app.post("/api/intake/email", async (req, res) => {
       );
     }
 
-    // Limpieza final
     const fieldsClean = cleanFields(fieldsRaw);
 
     console.log("INTAKE responsables:", {
       toCcBercia,
       responsablesArr,
-      desdeBody: parseResponsablesFromBody(bodyText),
+      desdeBody: parseResponsablesFromBody(bodyHtmlText || bodyPreviewText),
     });
 
     // 5) Traer columnas reales + sanitizar
