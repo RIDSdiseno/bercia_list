@@ -2,6 +2,7 @@
 import "dotenv/config";
 import express from "express";
 import bodyParser from "body-parser";
+import axios from "axios";
 
 import { getAppToken } from "./scripts/graph";
 import {
@@ -115,11 +116,51 @@ function parseResponsablesFromBody(body: string): string[] {
 
 /**
  * Limpia fields para evitar enviar undefined/null a Graph.
- * (Graph es quisquilloso y a veces devuelve 400 genérico.)
  */
 function cleanFields(fields: Record<string, any>) {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined || v === null) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Trae columnas reales de la lista (internal names).
+ * Esto evita 400 por nombres inventados o en desuso.
+ */
+async function getListColumns(token: string, siteId: string, listId: string) {
+  const { data } = await axios.get(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/lists/${listId}/columns?$select=name,displayName,hidden,readOnly`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  return (data?.value ?? []) as Array<{
+    name: string;
+    displayName: string;
+    hidden?: boolean;
+    readOnly?: boolean;
+  }>;
+}
+
+/**
+ * Deja solo los fields que EXISTEN en la lista (por internal name) y no son hidden/readonly.
+ */
+function sanitizeFieldsByColumns(
+  fields: Record<string, any>,
+  columns: Array<{ name: string; hidden?: boolean; readOnly?: boolean }>
+) {
+  const allowed = new Set(
+    columns
+      .filter((c) => !c.hidden && !c.readOnly)
+      .map((c) => c.name)
+  );
+
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (!allowed.has(k)) continue;
     if (v === undefined || v === null) continue;
     if (Array.isArray(v) && v.length === 0) continue;
     out[k] = v;
@@ -236,19 +277,20 @@ app.post("/api/intake/email", async (req, res) => {
       Observaciones: truncate(bodyPreview || "", 1800),
       Notificado: Boolean(solicitanteEmail),
 
-      // OJO: estos nombres deben existir como "internal name"
+      // ⚠️ estos nombres se filtran por columnas reales abajo
       Cliente_x002f_Proyecto: clienteProyecto ?? "",
       Estadoderevisi_x00f3_n: "Pendiente",
 
-      // Choice (solo si calza con opciones reales)
-      Prioridad: PRIORIDAD_CHOICES.includes(prioridad as any) ? prioridad : undefined,
-      Tipodetarea: TIPO_TAREA_CHOICES.includes(tipoTarea as any) ? tipoTarea : undefined,
+      Prioridad: PRIORIDAD_CHOICES.includes(prioridad as any)
+        ? prioridad
+        : undefined,
+      Tipodetarea: TIPO_TAREA_CHOICES.includes(tipoTarea as any)
+        ? tipoTarea
+        : undefined,
 
-      // Backup texto
       Solicitante: solicitanteEmail || undefined,
       Responsable: responsablesArr.join(";"),
 
-      // Si algún día quieres guardar receivedDateTime con internal name real:
       // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
@@ -259,7 +301,6 @@ app.post("/api/intake/email", async (req, res) => {
 
     /* ================= PEOPLE por LookupId ================= */
     try {
-      // Solicitante persona (single)
       if (solicitanteEmail) {
         const solicitanteId = await getSiteUserLookupId(
           token,
@@ -268,12 +309,9 @@ app.post("/api/intake/email", async (req, res) => {
         );
         if (solicitanteId) {
           fieldsRaw["Solicitante0LookupId"] = solicitanteId;
-        } else {
-          console.warn("No LookupId solicitante:", solicitanteEmail);
         }
       }
 
-      // Responsables persona (multi)
       if (responsablesArr.length > 0) {
         const ids = await Promise.all(
           responsablesArr.map((mail) =>
@@ -287,8 +325,6 @@ app.post("/api/intake/email", async (req, res) => {
 
         if (responsablesIds.length > 0) {
           fieldsRaw["ResponsablesLookupId"] = responsablesIds;
-        } else {
-          console.warn("No LookupId responsables:", responsablesArr);
         }
       }
     } catch (err: any) {
@@ -299,7 +335,7 @@ app.post("/api/intake/email", async (req, res) => {
     }
 
     // Limpieza final
-    const fields = cleanFields(fieldsRaw);
+    const fieldsClean = cleanFields(fieldsRaw);
 
     console.log("INTAKE responsables:", {
       toCcBercia,
@@ -307,46 +343,26 @@ app.post("/api/intake/email", async (req, res) => {
       desdeBody: parseResponsablesFromBody(bodyText),
     });
 
-    console.log("FIELDS A ENVIAR:", JSON.stringify(fields, null, 2));
+    // 5) Traer columnas reales + sanitizar
+    const columns = await getListColumns(token, SITE_ID!, LIST_ID!);
 
-    // 5) Crear item en SharePoint (Graph)
-    try {
-      await createListItem(token, {
-        siteId: SITE_ID!,
-        listId: LIST_ID!,
-        fields,
-      });
-    } catch (e: any) {
-      const status = e?.response?.status;
-      const data = e?.response?.data;
+    console.log(
+      "COLUMNAS REALES:",
+      columns.map((c) => `${c.name} (${c.displayName})`)
+    );
 
-      // Retry mínimo automático si Graph devuelve 400 invalidRequest
-      if (status === 400) {
-        console.warn(
-          "[RETRY-MINIMO] Graph 400 invalidRequest. Reintentando con campos mínimos."
-        );
+    const fieldsSanitized = sanitizeFieldsByColumns(fieldsClean, columns);
 
-        const minimalFields = cleanFields({
-          Title: fields.Title,
-          Observaciones: fields.Observaciones,
-          Solicitante: fields.Solicitante,
-          Responsable: fields.Responsable,
-        });
+    console.log("FIELDS SANITIZADOS:", JSON.stringify(fieldsSanitized, null, 2));
 
-        console.log("FIELDS MINIMOS:", JSON.stringify(minimalFields, null, 2));
+    // 6) Crear item en SharePoint (Graph)
+    await createListItem(token, {
+      siteId: SITE_ID!,
+      listId: LIST_ID!,
+      fields: fieldsSanitized,
+    });
 
-        await createListItem(token, {
-          siteId: SITE_ID!,
-          listId: LIST_ID!,
-          fields: minimalFields,
-        });
-      } else {
-        console.error("createListItem error:", data || e?.message || e);
-        throw e;
-      }
-    }
-
-    // 6) Notificación opcional al solicitante
+    // 7) Notificación opcional al solicitante
     if (solicitanteEmail) {
       await sendConfirmationEmail(
         token,
