@@ -98,6 +98,22 @@ function parseCc(input: unknown): string[] {
   return extractEmails(String(input));
 }
 
+/**
+ * Lee responsables desde el body del correo:
+ * Ej: "Responsables: a@x.com; b@y.com"
+ * Si no encuentra la línea, devuelve [].
+ */
+function parseResponsablesFromBody(body: string): string[] {
+  const m = body.match(/Responsables\s*:\s*(.+)/i);
+  if (!m?.[1]) return [];
+
+  return m[1]
+    .split(/[;,]/)
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+
 /* ===================== App ===================== */
 
 const app = express();
@@ -140,34 +156,45 @@ app.post("/api/intake/email", async (req, res) => {
 
     const token = await getAppToken(TENANT_ID!, CLIENT_ID!, CLIENT_SECRET!);
 
-    const texto = `${subject ?? ""}\n${bodyHtml || bodyPreview || ""}`;
+    const bodyText = String(bodyHtml || bodyPreview || "");
+    const texto = `${subject ?? ""}\n${bodyText}`;
+
     const prioridad = guessPrioridad(texto);
     const tipoTarea = guessTipoTarea(texto);
-    const fechaSolicitada = extractFirstDateISO(bodyHtml || bodyPreview || "");
-    const clienteProyecto = extractClientProject(
-      subject ?? "",
-      bodyHtml || bodyPreview || ""
-    );
+    const fechaSolicitada = extractFirstDateISO(bodyText);
+    const clienteProyecto = extractClientProject(subject ?? "", bodyText);
 
-    // ====== Emails LIMPIOS ======
+    // ====== Solicitante email limpio ======
     const solicitanteEmail =
       extractEmails(from)[0] ??
       (typeof from === "string" ? from.trim().toLowerCase() : "");
 
-    // ========= Responsables desde CC, excluyendo admin =========
+    // ========= Responsables =========
     const ADMIN_MAIL = "administrador@bercia.cl";
 
-    let responsablesArr = parseCc(toCcBercia);
+    // 1) Primero intenta desde body
+    let responsablesArr = parseResponsablesFromBody(bodyText);
+
+    // 2) Si no venían en body, usa To+CC del flujo (toCcBercia)
     if (responsablesArr.length === 0) {
-      const raw = String(toCcBercia ?? "").replace(/,/g, ";");
-      responsablesArr = normalizeToCc(raw)
-        .split(";")
-        .map((s) => s.trim().toLowerCase())
-        .filter(Boolean);
+      responsablesArr = parseCc(toCcBercia);
+
+      if (responsablesArr.length === 0) {
+        const raw = String(toCcBercia ?? "").replace(/,/g, ";");
+        responsablesArr = normalizeToCc(raw)
+          .split(";")
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean);
+      }
     }
 
+    // Limpieza + únicos
     responsablesArr = Array.from(new Set(responsablesArr));
-    responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
+
+    // Excluir admin si hay más de uno
+    if (responsablesArr.length > 1) {
+      responsablesArr = responsablesArr.filter((e) => e !== ADMIN_MAIL);
+    }
 
     if (responsablesArr.length === 0) {
       responsablesArr = [ADMIN_MAIL];
@@ -192,9 +219,8 @@ app.post("/api/intake/email", async (req, res) => {
     const fields: Record<string, any> = {
       Title: subject ?? "(sin asunto)",
       Observaciones: truncate(bodyPreview || "", 1800),
-      Notificado: Boolean(from),
+      Notificado: Boolean(solicitanteEmail),
       Cliente_x002f_Proyecto: clienteProyecto ?? "",
-      // ReceivedDateTime: receivedDateTime ?? undefined,
     };
 
     if (fechaSolicitada) {
@@ -202,21 +228,19 @@ app.post("/api/intake/email", async (req, res) => {
       if (!isNaN(Date.parse(iso))) fields.Fechasolicitada = iso;
     }
 
-    const ESTADO_CHOICES = ["Pendiente", "En revisión", "Completado"] as const;
     fields.Estadoderevisi_x00f3_n = "Pendiente";
     if (PRIORIDAD_CHOICES.includes(prioridad as any)) fields.Prioridad = prioridad;
     if (TIPO_TAREA_CHOICES.includes(tipoTarea as any)) fields.Tipodetarea = tipoTarea;
 
     /* ================= BACKUP TEXTO ================= */
     if (solicitanteEmail) {
-      fields["Solicitante"] = solicitanteEmail; // SolicitanteEmail (texto)
+      fields["Solicitante"] = solicitanteEmail; // texto
     }
-    fields["Responsable"] = responsablesArr.join(";"); // ResponsablesEmail (texto)
+    fields["Responsable"] = responsablesArr.join(";"); // texto
 
-    /* ================= PEOPLE por LookupId =================
-       Si lookup falla (permiso/usuario no existe), NO rompe el flujo.
-    ========================================================= */
+    /* ================= PEOPLE por LookupId ================= */
     try {
+      // Solicitante persona (single)
       if (solicitanteEmail) {
         const solicitanteId = await getSiteUserLookupId(
           token,
@@ -224,33 +248,44 @@ app.post("/api/intake/email", async (req, res) => {
           solicitanteEmail
         );
         if (solicitanteId) {
+          // internal name real de tu columna persona de solicitante
           fields["Solicitante0LookupId"] = solicitanteId;
         } else {
           console.warn("No LookupId solicitante:", solicitanteEmail);
         }
       }
 
+      // Responsables persona (multi)
       if (responsablesArr.length > 0) {
         const ids = await Promise.all(
           responsablesArr.map((mail) =>
             getSiteUserLookupId(token, SITE_ID!, mail)
           )
         );
+
         const responsablesIds = ids.filter(
-          (x): x is number => typeof x === "number"
+          (x): x is number => Number.isFinite(x as number)
         );
 
         if (responsablesIds.length > 0) {
+          // internal name real de tu columna persona multi de responsables
           fields["ResponsablesLookupId"] = responsablesIds;
         } else {
           console.warn("No LookupId responsables:", responsablesArr);
         }
       }
     } catch (err: any) {
-      console.warn("Lookup People falló, se creará solo con texto:", err?.response?.data || err);
+      console.warn(
+        "Lookup People falló, se creará solo con texto:",
+        err?.response?.data || err
+      );
     }
 
-    console.log("INTAKE responsables:", { toCcBercia, responsablesArr });
+    console.log("INTAKE responsables:", {
+      toCcBercia,
+      responsablesArr,
+      desdeBody: parseResponsablesFromBody(bodyText),
+    });
 
     await createListItem(token, {
       siteId: SITE_ID!,
@@ -259,11 +294,11 @@ app.post("/api/intake/email", async (req, res) => {
     });
 
     // 5) Notificación opcional al solicitante
-    if (from) {
+    if (solicitanteEmail) {
       await sendConfirmationEmail(
         token,
         MAILBOX_USER_ID!,
-        solicitanteEmail || String(from),
+        solicitanteEmail,
         subject ?? "(sin asunto)"
       );
     }

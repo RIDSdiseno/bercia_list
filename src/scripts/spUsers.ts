@@ -1,16 +1,57 @@
 // src/scripts/spUsers.ts
 import axios from "axios";
 
-type SiteUser = {
-  id: string;
-  email?: string;
-  loginName?: string;
-  userPrincipalName?: string;
-};
+/**
+ * Obtiene el webUrl real del sitio desde Graph.
+ */
+async function getSiteWebUrl(token: string, siteId: string): Promise<string> {
+  const { data } = await axios.get(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}?$select=webUrl`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+  const webUrl: string | undefined = data?.webUrl;
+  if (!webUrl) throw new Error("No pude obtener webUrl del sitio con Graph.");
+  return webUrl;
+}
+
+/**
+ * Asegura/resuelve un usuario en el sitio y devuelve su LookupId.
+ * - Si el usuario ya existe en el sitio, devuelve su Id igualmente.
+ * - Si no existe o no es válido, lanza error (lo capturas arriba).
+ */
+async function ensureUserId(
+  webUrl: string,
+  token: string,
+  emailOrUpn: string
+): Promise<number> {
+  const target = (emailOrUpn || "").trim();
+  if (!target) throw new Error("emailOrUpn vacío");
+
+  const { data } = await axios.post(
+    `${webUrl}/_api/web/ensureuser`,
+    { logonName: target },
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json;odata=nometadata",
+        "Content-Type": "application/json;odata=nometadata",
+      },
+    }
+  );
+
+  const n = Number(data?.Id);
+  if (!Number.isFinite(n)) throw new Error("ensureuser no devolvió Id válido");
+  return n;
+}
 
 /**
  * Busca LookupId de un usuario dentro del sitio SharePoint.
- * Requiere Sites.ReadWrite.All + Directory.Read.All (Application).
+ * ✅ Versión correcta (sin /sites/{id}/users).
+ *
+ * Requiere (Application):
+ * - Sites.ReadWrite.All  (para ensureuser)
+ * - Directory.Read.All o User.Read.All (según tenant)
  */
 export async function getSiteUserLookupId(
   token: string,
@@ -20,30 +61,12 @@ export async function getSiteUserLookupId(
   const target = (emailOrUpn || "").toLowerCase().trim();
   if (!target) return null;
 
-  // 1) Listar usuarios del sitio
-  const { data } = await axios.get(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/users?$select=id,email,loginName,userPrincipalName`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  const users: SiteUser[] = data?.value || [];
-
-  const match = users.find((u) => {
-    const email = (u.email || "").toLowerCase();
-    const upn = (u.userPrincipalName || "").toLowerCase();
-    const login = (u.loginName || "").toLowerCase();
-
-    return (
-      email === target ||
-      upn === target ||
-      login.includes(target) ||              // a veces viene como i:0#.f|membership|user@dominio
-      login.endsWith(target)
-    );
-  });
-
-  if (!match) return null;
-
-  // Graph entrega id tipo "123" como string -> LookupId numérico
-  const n = Number(match.id);
-  return Number.isFinite(n) ? n : null;
+  try {
+    const webUrl = await getSiteWebUrl(token, siteId);
+    const id = await ensureUserId(webUrl, token, target);
+    return id;
+  } catch (e) {
+    // no se pudo resolver/asegurar usuario en el sitio
+    return null;
+  }
 }
