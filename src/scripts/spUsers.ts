@@ -2,56 +2,8 @@
 import axios from "axios";
 
 /**
- * Obtiene el webUrl real del sitio desde Graph.
- */
-async function getSiteWebUrl(token: string, siteId: string): Promise<string> {
-  const { data } = await axios.get(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}?$select=webUrl`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  const webUrl: string | undefined = data?.webUrl;
-  if (!webUrl) throw new Error("No pude obtener webUrl del sitio con Graph.");
-  return webUrl;
-}
-
-/**
- * Asegura/resuelve un usuario en el sitio y devuelve su LookupId.
- * - Si el usuario ya existe en el sitio, devuelve su Id igualmente.
- * - Si no existe o no es válido, lanza error (lo capturas arriba).
- */
-async function ensureUserId(
-  webUrl: string,
-  token: string,
-  emailOrUpn: string
-): Promise<number> {
-  const target = (emailOrUpn || "").trim();
-  if (!target) throw new Error("emailOrUpn vacío");
-
-  const { data } = await axios.post(
-    `${webUrl}/_api/web/ensureuser`,
-    { logonName: target },
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json;odata=nometadata",
-        "Content-Type": "application/json;odata=nometadata",
-      },
-    }
-  );
-
-  const n = Number(data?.Id);
-  if (!Number.isFinite(n)) throw new Error("ensureuser no devolvió Id válido");
-  return n;
-}
-
-/**
- * Busca LookupId de un usuario dentro del sitio SharePoint.
- * ✅ Versión correcta (sin /sites/{id}/users).
- *
- * Requiere (Application):
- * - Sites.ReadWrite.All  (para ensureuser)
- * - Directory.Read.All o User.Read.All (según tenant)
+ * Busca/asegura un usuario en el sitio SharePoint y devuelve su LookupId numérico.
+ * Usa SharePoint REST porque /sites/{id}/users en Graph no siempre existe.
  */
 export async function getSiteUserLookupId(
   token: string,
@@ -61,12 +13,76 @@ export async function getSiteUserLookupId(
   const target = (emailOrUpn || "").toLowerCase().trim();
   if (!target) return null;
 
-  try {
-    const webUrl = await getSiteWebUrl(token, siteId);
-    const id = await ensureUserId(webUrl, token, target);
-    return id;
-  } catch (e) {
-    // no se pudo resolver/asegurar usuario en el sitio
-    return null;
+  // 1) Obtener webUrl real del sitio
+  const siteRes = await axios.get(
+    `https://graph.microsoft.com/v1.0/sites/${siteId}?$select=webUrl`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const webUrl: string | undefined = siteRes.data?.webUrl;
+  if (!webUrl) throw new Error("No pude obtener webUrl del sitio.");
+
+  const spHeaders = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json;odata=nometadata",
+    "Content-Type": "application/json;odata=nometadata",
+  };
+
+  // helper: listar usuarios del sitio
+  async function listUsers() {
+    const usersRes = await axios.get(
+      `${webUrl}/_api/web/siteusers?$select=Id,Email,UserPrincipalName,LoginName`,
+      { headers: spHeaders }
+    );
+    return usersRes.data?.value ?? [];
   }
+
+  // 2) Buscar en usuarios actuales
+  let users = await listUsers();
+
+  let match = users.find((u: any) => {
+    const email = (u.Email || "").toLowerCase();
+    const upn = (u.UserPrincipalName || "").toLowerCase();
+    const login = (u.LoginName || "").toLowerCase();
+
+    return (
+      email === target ||
+      upn === target ||
+      login.includes(target) ||
+      login.endsWith(target)
+    );
+  });
+
+  // 3) Si NO existe, asegurar usuario en el sitio
+  if (!match) {
+    try {
+      await axios.post(
+        `${webUrl}/_api/web/ensureuser`,
+        { logonName: target }, // email o upn
+        { headers: spHeaders }
+      );
+    } catch (e: any) {
+      console.warn("ensureuser falló para:", target, e?.response?.data || e);
+      // aunque ensureuser falle, seguimos con lo que haya
+    }
+
+    // 4) Volver a listar y buscar
+    users = await listUsers();
+    match = users.find((u: any) => {
+      const email = (u.Email || "").toLowerCase();
+      const upn = (u.UserPrincipalName || "").toLowerCase();
+      const login = (u.LoginName || "").toLowerCase();
+
+      return (
+        email === target ||
+        upn === target ||
+        login.includes(target) ||
+        login.endsWith(target)
+      );
+    });
+  }
+
+  if (!match) return null;
+
+  const n = Number(match.Id);
+  return Number.isFinite(n) ? n : null;
 }
