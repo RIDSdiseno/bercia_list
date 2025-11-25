@@ -1,37 +1,26 @@
 {
-  "name": "express-bercia-flow",
+  "name": "bercia-mail-to-list",
   "version": "1.0.0",
-  "description": "",
-  "main": "dist/server.js",
+  "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+  "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
+  "build": "tsc",
+  "start": "node dist/server.js",
+  "discover:uil": "ts-node src/scripts/discoverUserInfoList.ts",
+  "discover:ct": "ts-node src/scripts/discoverContentTypes.ts"
 
-    "dev": "nodemon --watch src --exec ts-node src/server.ts",
-
-    "build": "tsc",
-
-    "start": "node dist/server.js",
-
-    "discover": "dotenv -e .env -- ts-node src/scripts/discover.ts",
-    "list-columns": "dotenv -e .env -- ts-node src/scripts/list-columns.ts",
-    "print-token": "dotenv -e .env -- ts-node src/scripts/print-token.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+}
+,
   "dependencies": {
-    "@azure/msal-node": "^3.8.1",
-    "axios": "^1.13.2",
-    "body-parser": "^2.2.0",
-    "express": "^5.1.0"
+    "@azure/msal-node": "^2.14.1",
+    "axios": "^1.7.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   },
   "devDependencies": {
-    "@types/express": "^5.0.5",
-    "@types/node": "^24.10.0",
-    "dotenv-cli": "^11.0.0",
-    "nodemon": "^3.1.10",
-    "ts-node": "^10.9.2",
-    "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.10",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.5.4"
   }
 }

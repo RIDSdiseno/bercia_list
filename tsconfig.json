@@ -1,25 +1,11 @@
 {
   "compilerOptions": {
-    /* Node + CommonJS */
     "target": "ES2022",
     "module": "CommonJS",
-    "moduleResolution": "Node",
-
-    /* Imports “normales” (import express from "express") en CJS */
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-
-    /* Salida/depuración */
     "outDir": "dist",
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
-
-    /* Calidad */
+    "rootDir": "src",
     "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
     "skipLibCheck": true
-  },
-  "include": ["src"]
+  }
 }

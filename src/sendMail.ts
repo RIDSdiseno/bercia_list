@@ -1,0 +1,116 @@
+// src/sendMail.ts
+import { graphPost } from "./graph";
+import { cfg } from "./config";
+
+async function sendMailBase(to: string, subject: string, htmlBody: string) {
+  if (!to) return;
+  const body = {
+    message: {
+      subject,
+      body: {
+        contentType: "HTML",
+        content: htmlBody,
+      },
+      toRecipients: [
+        {
+          emailAddress: { address: to },
+        },
+      ],
+    },
+    saveToSentItems: true,
+  };
+
+  await graphPost(
+    `/users/${cfg.mailboxUserId}/sendMail`,
+    body
+  );
+}
+
+// 🔹 correo cuando se crea la solicitud
+export async function sendMailNuevaSolicitud(params: {
+  to: string;
+  titulo: string;
+  cliente?: string;
+  fechaSolicitada?: string;
+  tipodetarea?: string;
+  webUrl?: string;
+}) {
+  const { to, titulo, cliente, fechaSolicitada, tipodetarea, webUrl } = params;
+
+  const subject = `Tu solicitud "${titulo}" ha sido creada`;
+
+  const html = `
+    <p>Hola,</p>
+    <p>Tu solicitud ha sido creada correctamente en el sistema de Bercia.</p>
+    <ul>
+      <li><strong>Título:</strong> ${titulo}</li>
+      <li><strong>Cliente/Proyecto:</strong> ${cliente || "No especificado"}</li>
+      <li><strong>Tipo de tarea:</strong> ${tipodetarea || "No especificado"}</li>
+      <li><strong>Fecha solicitada:</strong> ${fechaSolicitada || "No indicada"}</li>
+    </ul>
+    ${
+      webUrl
+        ? `<p>Puedes ver el detalle aquí: <a href="${webUrl}">${webUrl}</a></p>`
+        : ""
+    }
+    <p>Saludos,<br/>Alfombras Bercia</p>
+  `;
+
+  await sendMailBase(to, subject, html);
+}
+
+// 🔹 correo cuando cambia el estado (Confirmada / Rechazada)
+export async function sendMailCambioEstado(params: {
+  to: string;
+  titulo: string;
+  estado: "Confirmada" | "Rechazada";
+  cliente?: string;
+  fechaSolicitada?: string;
+  fechaConfirmada?: string;
+  comentarioEncargado?: string;
+  webUrl?: string;
+}) {
+  const {
+    to,
+    titulo,
+    estado,
+    cliente,
+    fechaSolicitada,
+    fechaConfirmada,
+    comentarioEncargado,
+    webUrl,
+  } = params;
+
+  const subject =
+    estado === "Confirmada"
+      ? `Tu solicitud "${titulo}" ha sido CONFIRMADA`
+      : `Tu solicitud "${titulo}" ha sido RECHAZADA`;
+
+  const html = `
+    <p>Hola,</p>
+    <p>El estado de tu solicitud ha cambiado a: <strong>${estado}</strong>.</p>
+    <ul>
+      <li><strong>Título:</strong> ${titulo}</li>
+      <li><strong>Cliente/Proyecto:</strong> ${cliente || "No especificado"}</li>
+      <li><strong>Fecha solicitada:</strong> ${fechaSolicitada || "No indicada"}</li>
+      ${
+        fechaConfirmada
+          ? `<li><strong>Fecha confirmada:</strong> ${fechaConfirmada}</li>`
+          : ""
+      }
+    </ul>
+    ${
+      comentarioEncargado
+        ? `<p><strong>Comentario del encargado:</strong> ${comentarioEncargado}</p>`
+        : ""
+    }
+    ${
+      webUrl
+        ? `<p>Puedes ver el detalle aquí: <a href="${webUrl}">${webUrl}</a></p>`
+        : ""
+    }
+    <p>Saludos,<br/>Alfombras Bercia</p>
+  `;
+
+  await sendMailBase(to, subject, html);
+}
