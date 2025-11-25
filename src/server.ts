@@ -59,4 +59,5 @@ setInterval(() => {
   processEstadoListOnce().catch(err =>
     console.error("Polling estado lista error:", err?.message || err)
   );
+  
 }, cfg.pollIntervalMs);
