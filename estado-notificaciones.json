@@ -1,9 +1,24 @@
 {
-  "170": "Confirmada",
-  "172": "Confirmada",
-  "174": "Confirmada",
-  "175": "Confirmada",
-  "176": "Confirmada",
-  "178": "Confirmada",
-  "181": "Confirmada"
+  "170": {
+    "estado": "Confirmada"
+  },
+  "172": {
+    "estado": "Confirmada"
+  },
+  "174": {
+    "estado": "Confirmada"
+  },
+  "175": {
+    "estado": "Confirmada"
+  },
+  "176": {
+    "estado": "Confirmada"
+  },
+  "178": {
+    "estado": "Confirmada"
+  },
+  "181": {
+    "estado": "Confirmada"
+  },
+  "182": {}
 }

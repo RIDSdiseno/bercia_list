@@ -202,7 +202,6 @@ export async function processInboxOnce() {
       Fechasolicitada: fechaSolicitadaValue,
     };
 
-    // solo setear FechaConfirmada si viene en el correo
     if (fechaConfirmadaValue) {
       fields.FechaConfirmada = fechaConfirmadaValue;
     }
@@ -213,19 +212,18 @@ export async function processInboxOnce() {
     const prioOk = normalizePrioridad(parsed.prioridad);
     if (prioOk) fields.Prioridad = prioOk;
 
+    // columna persona "Solicitante0"
     if (solicitanteId) fields.Solicitante0LookupId = solicitanteId;
 
-    // 1) crear item
     const created = await createListItem(fields);
     const itemId = Number(created?.id);
     const itemUrl: string | undefined = (created as any)?.webUrl;
 
-    // 2) setear responsables persona
+    // multi persona "Responsables"
     if (Number.isFinite(itemId) && responsablesIds.length) {
       await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
     }
 
-    // 3) mail al solicitante
     if (solicitanteMail) {
       await sendMailNuevaSolicitud({
         to: solicitanteMail,
@@ -237,7 +235,6 @@ export async function processInboxOnce() {
       });
     }
 
-    // 4) marcar este mensaje como procesado
     markProcessed(m.id);
 
     console.log("✅ Item creado + correo enviado:", m.subject);
@@ -318,12 +315,10 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     }
   }
 
-  // 🟢 Fecha solicitada: del body o ahora
   const fechaSolicitadaValue = parsed.fechaSolicitada
     ? normalizeDate(parsed.fechaSolicitada)
     : nowForSharePoint();
 
-  // 🟢 Fecha confirmada: también desde el body si viene
   const fechaConfirmadaValue = parsed.fechaConfirmada
     ? normalizeDate(parsed.fechaConfirmada)
     : undefined;
@@ -384,6 +379,6 @@ function normalizeDate(input: string) {
   const dd = m[1].padStart(2, "0");
   const mm = m[2].padStart(2, "0");
   const yyyy = m[3];
-  // puedes dejarla a medianoche, o ajustarla a local si quieres hora también
+
   return `${yyyy}-${mm}-${dd}T00:00:00Z`;
 }
