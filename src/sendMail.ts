@@ -114,3 +114,43 @@ export async function sendMailCambioEstado(params: {
 
   await sendMailBase(to, subject, html);
 }
+
+// 🔹 correo cuando el encargado escribe / modifica su comentario
+export async function sendMailComentarioEncargado(params: {
+  to: string;
+  titulo: string;
+  cliente?: string;
+  comentarioEncargado?: string;
+  webUrl?: string;
+}) {
+  const { to, titulo, cliente, comentarioEncargado, webUrl } = params;
+
+  const subject = `Nuevo comentario en tu solicitud "${titulo}"`;
+
+  const html = `
+    <p>Hola,</p>
+    <p>El encargado ha agregado/modificado un comentario en tu solicitud.</p>
+    <ul>
+      <li><strong>Título:</strong> ${titulo}</li>
+      <li><strong>Cliente/Proyecto:</strong> ${
+        cliente || "No especificado"
+      }</li>
+    </ul>
+    ${
+      comentarioEncargado
+        ? `<p><strong>Comentario del encargado:</strong><br/>${comentarioEncargado.replace(
+            /\n/g,
+            "<br/>"
+          )}</p>`
+        : ""
+    }
+    ${
+      webUrl
+        ? `<p>Puedes ver el detalle aquí: <a href="${webUrl}">${webUrl}</a></p>`
+        : ""
+    }
+    <p>Saludos,<br/>Alfombras Bercia</p>
+  `;
+
+  await sendMailBase(to, subject, html);
+}

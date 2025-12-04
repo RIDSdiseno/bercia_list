@@ -113,9 +113,7 @@ function htmlToText(html: string) {
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<[^>]+>/g, " ");
 
-  text = text
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&");
+  text = text.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&");
 
   const lines = text
     .replace(/\r/g, "")
@@ -183,10 +181,15 @@ export async function processInboxOnce() {
       }
     }
 
-    // Fecha solicitada: la que viene en el correo o ahora
+    // 🟢 Fecha solicitada: la que viene en el correo o ahora
     const fechaSolicitadaValue = parsed.fechaSolicitada
       ? normalizeDate(parsed.fechaSolicitada)
       : nowForSharePoint();
+
+    // 🟢 Fecha confirmada: la que pone el solicitante en el correo (si viene)
+    const fechaConfirmadaValue = parsed.fechaConfirmada
+      ? normalizeDate(parsed.fechaConfirmada)
+      : undefined;
 
     const fields: any = {
       Title: m.subject || "Solicitud",
@@ -198,6 +201,11 @@ export async function processInboxOnce() {
       Responsable: responsablesMails.join("; "),
       Fechasolicitada: fechaSolicitadaValue,
     };
+
+    // solo setear FechaConfirmada si viene en el correo
+    if (fechaConfirmadaValue) {
+      fields.FechaConfirmada = fechaConfirmadaValue;
+    }
 
     fields.Tipodetarea =
       normalizeTipodetarea(parsed.tipodetarea) ?? "envio";
@@ -310,10 +318,15 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     }
   }
 
-  // Fecha solicitada: del body o ahora
+  // 🟢 Fecha solicitada: del body o ahora
   const fechaSolicitadaValue = parsed.fechaSolicitada
     ? normalizeDate(parsed.fechaSolicitada)
     : nowForSharePoint();
+
+  // 🟢 Fecha confirmada: también desde el body si viene
+  const fechaConfirmadaValue = parsed.fechaConfirmada
+    ? normalizeDate(parsed.fechaConfirmada)
+    : undefined;
 
   const fields: any = {
     Title: subject || "Solicitud",
@@ -325,6 +338,10 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     Responsable: responsablesMails.join("; "),
     Fechasolicitada: fechaSolicitadaValue,
   };
+
+  if (fechaConfirmadaValue) {
+    fields.FechaConfirmada = fechaConfirmadaValue;
+  }
 
   fields.Tipodetarea =
     normalizeTipodetarea(parsed.tipodetarea) ?? "envio";

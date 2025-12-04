@@ -1,18 +1,15 @@
+// config.ts (versión simple)
 import "dotenv/config";
 
 export const cfg = {
   contentTypeId: process.env.CONTENT_TYPE_ID || "",
 
-  // Azure app (tenant Bercia)
   tenantId: process.env.BERCIA_TENANT_ID!,
   clientId: process.env.BERCIA_CLIENT_ID!,
   clientSecret: process.env.BERCIA_CLIENT_SECRET!,
 
-  // Mailbox administrador
   mailboxUserId: process.env.MAILBOX_USER_ID!,
   targetFolderPath: process.env.TARGET_FOLDER_PATH || "Prueba-Flujo-list",
-
-  // ✅ NUEVO: carpeta donde se moverán los correos ya procesados
   processedFolderPath:
     process.env.PROCESSED_FOLDER_PATH || "Procesados-Flujo-list",
 
@@ -20,9 +17,8 @@ export const cfg = {
   adminEmail: (process.env.ADMIN_EMAIL || "administrador@bercia.cl")
     .toLowerCase(),
 
-  // SharePoint destino
-  siteId: process.env.SITE_ID!,
-  listId: process.env.LIST_ID!,
+  siteId: process.env.SITE_ID!,   // 👉 usa el que me acabas de pasar
+  listId: process.env.LIST_ID!,   // 👉 el que tengas ahora para la lista de pruebas
 
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 60000),
 };

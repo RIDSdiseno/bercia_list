@@ -4,6 +4,7 @@ export type ParsedMail = {
   prioridad?: string;
   responsables?: string[];
   fechaSolicitada?: string;
+  fechaConfirmada?: string;
   observaciones?: string;
 };
 
@@ -34,8 +35,13 @@ export function parseMail(bodyText: string): ParsedMail {
       .filter(x => x.includes("@"));
   }
 
+  // 🟢 estas ya las tenías
   out.fechaSolicitada =
     kv(take("Fecha solicitada")) || kv(take("Fechasolicitada"));
+
+  // 🆕 nueva: Fecha confirmada escrita por el solicitante
+  out.fechaConfirmada =
+    kv(take("Fecha confirmada")) || kv(take("Fechaconfirmada"));
 
   out.observaciones = kv(take("Observaciones")) || bodyText.trim();
 
