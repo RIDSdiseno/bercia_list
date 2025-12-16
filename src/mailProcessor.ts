@@ -80,11 +80,12 @@ function normalizeTipodetarea(raw?: string) {
 function normalizePrioridad(raw?: string) {
   if (!raw) return null;
   const s = raw.trim().toLowerCase();
-  if (s.startsWith("a")) return "Alta (semana)";
-  if (s.startsWith("m")) return "Media (próxima semana)";
-  if (s.startsWith("b")) return "Baja (avanzar)";
+  if (s.startsWith("a")) return "Alta";
+  if (s.startsWith("m")) return "Media";
+  if (s.startsWith("b")) return "Baja";
   return null;
 }
+
 
 // 🔹 Fecha/hora local para SharePoint (sin "Z")
 function nowForSharePoint(): string {
