@@ -3,9 +3,9 @@ import { cfg } from "./config";
 import { graphGet } from "./graph";
 import { createListItem } from "./sharepoint";
 import { parseMail } from "./parser";
+import { sendMailNuevaSolicitud } from "./sendMail";
 import { getSiteUserLookupId } from "./spUsers";
 import { spSetResponsables } from "./spList";
-import { sendMailNuevaSolicitud } from "./sendMail";
 import fs from "fs";
 import path from "path";
 
@@ -80,9 +80,9 @@ function normalizeTipodetarea(raw?: string) {
 function normalizePrioridad(raw?: string) {
   if (!raw) return null;
   const s = raw.trim().toLowerCase();
-  if (s.startsWith("a")) return "Alta";
-  if (s.startsWith("m")) return "Media";
-  if (s.startsWith("b")) return "Baja";
+  if (s.startsWith("a")) return "Alta (semana)";
+  if (s.startsWith("m")) return "Media (próxima semana)";
+  if (s.startsWith("b")) return "Baja (avanzar)";
   return null;
 }
 
@@ -139,7 +139,6 @@ export async function processInboxOnce() {
   if (!webUrl) throw new Error("No pude obtener webUrl del sitio");
 
   for (const m of res.value) {
-    // anti-duplicados
     if (processedIds.has(m.id)) continue;
 
     const subjectLower = (m.subject || "").toLowerCase();
@@ -148,16 +147,16 @@ export async function processInboxOnce() {
     const fromEmail =
       m.from?.emailAddress?.address?.trim().toLowerCase() || "";
 
-    const solicitanteMail =
-      fromEmail && fromEmail !== cfg.adminEmail ? fromEmail : "";
+    // 👉 el FROM siempre es el solicitante
+    const solicitanteMail = fromEmail;
 
+    // 👉 Responsables = CC distintos del admin y del solicitante
     const responsablesMails = Array.from(
       new Set(
         (m.ccRecipients ?? [])
           .map(r => r.emailAddress?.address)
           .filter((mail): mail is string => typeof mail === "string")
           .map(mail => mail.trim().toLowerCase())
-          .filter(mail => mail.endsWith(cfg.berciaDomain))
           .filter(mail => mail !== cfg.adminEmail)
           .filter(mail => mail !== solicitanteMail)
       )
@@ -167,36 +166,21 @@ export async function processInboxOnce() {
     const bodyText = htmlToText(bodyHtml);
     const parsed = parseMail(bodyText);
 
-    const solicitanteId = solicitanteMail
-      ? await getSiteUserLookupId(solicitanteMail, webUrl)
-      : null;
-
-    const responsablesIds: number[] = [];
-    for (const mail of responsablesMails) {
-      try {
-        const id = await getSiteUserLookupId(mail, webUrl);
-        if (id && !responsablesIds.includes(id)) responsablesIds.push(id);
-      } catch {
-        console.warn("⚠️ Responsable no resolvió:", mail);
-      }
-    }
-
-    // 🟢 Fecha solicitada: la que viene en el correo o ahora
     const fechaSolicitadaValue = parsed.fechaSolicitada
       ? normalizeDate(parsed.fechaSolicitada)
       : nowForSharePoint();
 
-    // 🟢 Fecha confirmada: la que pone el solicitante en el correo (si viene)
     const fechaConfirmadaValue = parsed.fechaConfirmada
       ? normalizeDate(parsed.fechaConfirmada)
       : undefined;
 
+    // ========== CAMPOS BASE (texto / choice / fecha) ==========
     const fields: any = {
       Title: m.subject || "Solicitud",
       Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
       Observaciones: parsed.observaciones || "Sin observaciones",
       Estadoderevisi_x00f3_n: "Pendiente",
-      Notificado: true,
+      // texto
       Solicitante: solicitanteMail || "",
       Responsable: responsablesMails.join("; "),
       Fechasolicitada: fechaSolicitadaValue,
@@ -212,18 +196,50 @@ export async function processInboxOnce() {
     const prioOk = normalizePrioridad(parsed.prioridad);
     if (prioOk) fields.Prioridad = prioOk;
 
-    // columna persona "Solicitante0"
-    if (solicitanteId) fields.Solicitante0LookupId = solicitanteId;
+    // ========== PERSONAS (Solicitante0 / Responsables) ==========
+    // Solicitante persona
+    try {
+      if (solicitanteMail) {
+        const solicitanteId = await getSiteUserLookupId(
+          solicitanteMail,
+          webUrl
+        );
+        if (solicitanteId) {
+          fields.Solicitante0LookupId = solicitanteId;
+        }
+      }
+    } catch {
+      console.warn(
+        "⚠️ No se pudo resolver solicitante como persona:",
+        solicitanteMail
+      );
+    }
 
+    // 1) crear item
     const created = await createListItem(fields);
     const itemId = Number(created?.id);
     const itemUrl: string | undefined = (created as any)?.webUrl;
 
-    // multi persona "Responsables"
-    if (Number.isFinite(itemId) && responsablesIds.length) {
-      await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
+    // 2) setear multi-persona Responsables
+    if (Number.isFinite(itemId) && responsablesMails.length) {
+      const responsablesIds: number[] = [];
+      for (const mail of responsablesMails) {
+        try {
+          const rid = await getSiteUserLookupId(mail, webUrl);
+          if (rid && !responsablesIds.includes(rid)) {
+            responsablesIds.push(rid);
+          }
+        } catch {
+          console.warn("⚠️ Responsable no resolvió como persona:", mail);
+        }
+      }
+
+      if (responsablesIds.length) {
+        await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
+      }
     }
 
+    // 3) mail al solicitante
     if (solicitanteMail) {
       await sendMailNuevaSolicitud({
         to: solicitanteMail,
@@ -282,13 +298,11 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     throw new Error("from (email) es obligatorio y debe ser válido");
   }
 
-  const solicitanteMail =
-    fromEmail !== cfg.adminEmail ? fromEmail : "";
+  const solicitanteMail = fromEmail;
 
   const responsablesMails = Array.from(
     new Set(
       ccMailsRaw
-        .filter(mail => mail.endsWith(cfg.berciaDomain))
         .filter(mail => mail !== cfg.adminEmail)
         .filter(mail => mail !== solicitanteMail)
     )
@@ -300,20 +314,6 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
   const site = await graphGet<any>(`/sites/${cfg.siteId}`);
   const webUrl: string = site?.webUrl;
   if (!webUrl) throw new Error("No pude obtener webUrl del sitio");
-
-  const solicitanteId = solicitanteMail
-    ? await getSiteUserLookupId(solicitanteMail, webUrl)
-    : null;
-
-  const responsablesIds: number[] = [];
-  for (const mail of responsablesMails) {
-    try {
-      const id = await getSiteUserLookupId(mail, webUrl);
-      if (id && !responsablesIds.includes(id)) responsablesIds.push(id);
-    } catch {
-      console.warn("⚠️ Responsable no resolvió:", mail);
-    }
-  }
 
   const fechaSolicitadaValue = parsed.fechaSolicitada
     ? normalizeDate(parsed.fechaSolicitada)
@@ -328,7 +328,6 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
     Observaciones: parsed.observaciones || "Sin observaciones",
     Estadoderevisi_x00f3_n: "Pendiente",
-    Notificado: true,
     Solicitante: solicitanteMail || "",
     Responsable: responsablesMails.join("; "),
     Fechasolicitada: fechaSolicitadaValue,
@@ -344,14 +343,43 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
   const prioOk = normalizePrioridad(parsed.prioridad);
   if (prioOk) fields.Prioridad = prioOk;
 
-  if (solicitanteId) fields.Solicitante0LookupId = solicitanteId;
+  // Solicitante persona
+  try {
+    const solicitanteId = await getSiteUserLookupId(solicitanteMail, webUrl);
+    if (solicitanteId) {
+      fields.Solicitante0LookupId = solicitanteId;
+    }
+  } catch {
+    console.warn(
+      "⚠️ No se pudo resolver solicitante como persona (test):",
+      solicitanteMail
+    );
+  }
 
   const created = await createListItem(fields);
   const itemId = Number(created?.id);
   const itemUrl: string | undefined = (created as any)?.webUrl;
 
-  if (Number.isFinite(itemId) && responsablesIds.length) {
-    await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
+  // Responsables persona múltiple
+  if (Number.isFinite(itemId) && responsablesMails.length) {
+    const responsablesIds: number[] = [];
+    for (const mail of responsablesMails) {
+      try {
+        const rid = await getSiteUserLookupId(mail, webUrl);
+        if (rid && !responsablesIds.includes(rid)) {
+          responsablesIds.push(rid);
+        }
+      } catch {
+        console.warn(
+          "⚠️ Responsable no resolvió como persona (test):",
+          mail
+        );
+      }
+    }
+
+    if (responsablesIds.length) {
+      await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
+    }
   }
 
   if (solicitanteMail) {
