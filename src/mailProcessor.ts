@@ -86,7 +86,6 @@ function normalizePrioridad(raw?: string) {
   return null;
 }
 
-
 // 🔹 Fecha/hora local para SharePoint (sin "Z")
 function nowForSharePoint(): string {
   const now = new Date();
@@ -119,7 +118,7 @@ function htmlToText(html: string) {
   const lines = text
     .replace(/\r/g, "")
     .split("\n")
-    .map(l => l.replace(/\s+/g, " ").trim())
+    .map((l) => l.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 
   return lines.join("\n");
@@ -145,21 +144,17 @@ export async function processInboxOnce() {
     const subjectLower = (m.subject || "").toLowerCase();
     if (!subjectLower.includes("list")) continue;
 
-    const fromEmail =
-      m.from?.emailAddress?.address?.trim().toLowerCase() || "";
-
-    // 👉 el FROM siempre es el solicitante
+    const fromEmail = m.from?.emailAddress?.address?.trim().toLowerCase() || "";
     const solicitanteMail = fromEmail;
 
-    // 👉 Responsables = CC distintos del admin y del solicitante
     const responsablesMails = Array.from(
       new Set(
         (m.ccRecipients ?? [])
-          .map(r => r.emailAddress?.address)
+          .map((r) => r.emailAddress?.address)
           .filter((mail): mail is string => typeof mail === "string")
-          .map(mail => mail.trim().toLowerCase())
-          .filter(mail => mail !== cfg.adminEmail)
-          .filter(mail => mail !== solicitanteMail)
+          .map((mail) => mail.trim().toLowerCase())
+          .filter((mail) => mail !== cfg.adminEmail)
+          .filter((mail) => mail !== solicitanteMail)
       )
     );
 
@@ -175,39 +170,30 @@ export async function processInboxOnce() {
       ? normalizeDate(parsed.fechaConfirmada)
       : undefined;
 
-    // ========== CAMPOS BASE (texto / choice / fecha) ==========
     const fields: any = {
       Title: m.subject || "Solicitud",
       Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
       Observaciones: parsed.observaciones || "Sin observaciones",
       Estadoderevisi_x00f3_n: "Pendiente",
-      // texto
+
+      // ✅ texto
       Solicitante: solicitanteMail || "",
       Responsable: responsablesMails.join("; "),
       Fechasolicitada: fechaSolicitadaValue,
     };
 
-    if (fechaConfirmadaValue) {
-      fields.FechaConfirmada = fechaConfirmadaValue;
-    }
+    if (fechaConfirmadaValue) fields.FechaConfirmada = fechaConfirmadaValue;
 
-    fields.Tipodetarea =
-      normalizeTipodetarea(parsed.tipodetarea) ?? "envio";
+    fields.Tipodetarea = normalizeTipodetarea(parsed.tipodetarea) ?? "envio";
 
     const prioOk = normalizePrioridad(parsed.prioridad);
     if (prioOk) fields.Prioridad = prioOk;
 
-    // ========== PERSONAS (Solicitante0 / Responsables) ==========
     // Solicitante persona
     try {
       if (solicitanteMail) {
-        const solicitanteId = await getSiteUserLookupId(
-          solicitanteMail,
-          webUrl
-        );
-        if (solicitanteId) {
-          fields.Solicitante0LookupId = solicitanteId;
-        }
+        const solicitanteId = await getSiteUserLookupId(solicitanteMail, webUrl);
+        if (solicitanteId) fields.Solicitante0LookupId = solicitanteId;
       }
     } catch {
       console.warn(
@@ -216,31 +202,27 @@ export async function processInboxOnce() {
       );
     }
 
-    // 1) crear item
     const created = await createListItem(fields);
-    const itemId = Number(created?.id);
+    const itemId = Number((created as any)?.id);
     const itemUrl: string | undefined = (created as any)?.webUrl;
 
-    // 2) setear multi-persona Responsables
+    // set multi-persona Responsables
     if (Number.isFinite(itemId) && responsablesMails.length) {
       const responsablesIds: number[] = [];
       for (const mail of responsablesMails) {
         try {
           const rid = await getSiteUserLookupId(mail, webUrl);
-          if (rid && !responsablesIds.includes(rid)) {
-            responsablesIds.push(rid);
-          }
+          if (rid && !responsablesIds.includes(rid)) responsablesIds.push(rid);
         } catch {
           console.warn("⚠️ Responsable no resolvió como persona:", mail);
         }
       }
-
       if (responsablesIds.length) {
         await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
       }
     }
 
-    // 3) mail al solicitante
+    // mail al solicitante
     if (solicitanteMail) {
       await sendMailNuevaSolicitud({
         to: solicitanteMail,
@@ -253,7 +235,6 @@ export async function processInboxOnce() {
     }
 
     markProcessed(m.id);
-
     console.log("✅ Item creado + correo enviado:", m.subject);
   }
 }
@@ -264,7 +245,7 @@ async function resolveFolderIdByName() {
   );
 
   const match = folders.value.find(
-    f =>
+    (f) =>
       (f.displayName || "").toLowerCase() ===
       cfg.targetFolderPath.toLowerCase()
   );
@@ -289,9 +270,7 @@ export type SimulatedMailInput = {
 export async function processSimulatedMail(input: SimulatedMailInput) {
   const subject = (input.subject || "").trim();
   const fromEmail = (input.from || "").trim().toLowerCase();
-  const ccMailsRaw = (input.cc || []).map(x =>
-    (x || "").trim().toLowerCase()
-  );
+  const ccMailsRaw = (input.cc || []).map((x) => (x || "").trim().toLowerCase());
   const bodyRaw = input.body || "";
 
   if (!subject) throw new Error("subject es obligatorio");
@@ -304,8 +283,8 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
   const responsablesMails = Array.from(
     new Set(
       ccMailsRaw
-        .filter(mail => mail !== cfg.adminEmail)
-        .filter(mail => mail !== solicitanteMail)
+        .filter((mail) => mail !== cfg.adminEmail)
+        .filter((mail) => mail !== solicitanteMail)
     )
   );
 
@@ -329,27 +308,22 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
     Observaciones: parsed.observaciones || "Sin observaciones",
     Estadoderevisi_x00f3_n: "Pendiente",
+
     Solicitante: solicitanteMail || "",
     Responsable: responsablesMails.join("; "),
     Fechasolicitada: fechaSolicitadaValue,
   };
 
-  if (fechaConfirmadaValue) {
-    fields.FechaConfirmada = fechaConfirmadaValue;
-  }
+  if (fechaConfirmadaValue) fields.FechaConfirmada = fechaConfirmadaValue;
 
-  fields.Tipodetarea =
-    normalizeTipodetarea(parsed.tipodetarea) ?? "envio";
+  fields.Tipodetarea = normalizeTipodetarea(parsed.tipodetarea) ?? "envio";
 
   const prioOk = normalizePrioridad(parsed.prioridad);
   if (prioOk) fields.Prioridad = prioOk;
 
-  // Solicitante persona
   try {
     const solicitanteId = await getSiteUserLookupId(solicitanteMail, webUrl);
-    if (solicitanteId) {
-      fields.Solicitante0LookupId = solicitanteId;
-    }
+    if (solicitanteId) fields.Solicitante0LookupId = solicitanteId;
   } catch {
     console.warn(
       "⚠️ No se pudo resolver solicitante como persona (test):",
@@ -358,26 +332,19 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
   }
 
   const created = await createListItem(fields);
-  const itemId = Number(created?.id);
+  const itemId = Number((created as any)?.id);
   const itemUrl: string | undefined = (created as any)?.webUrl;
 
-  // Responsables persona múltiple
   if (Number.isFinite(itemId) && responsablesMails.length) {
     const responsablesIds: number[] = [];
     for (const mail of responsablesMails) {
       try {
         const rid = await getSiteUserLookupId(mail, webUrl);
-        if (rid && !responsablesIds.includes(rid)) {
-          responsablesIds.push(rid);
-        }
+        if (rid && !responsablesIds.includes(rid)) responsablesIds.push(rid);
       } catch {
-        console.warn(
-          "⚠️ Responsable no resolvió como persona (test):",
-          mail
-        );
+        console.warn("⚠️ Responsable no resolvió como persona (test):", mail);
       }
     }
-
     if (responsablesIds.length) {
       await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
     }
@@ -409,5 +376,6 @@ function normalizeDate(input: string) {
   const mm = m[2].padStart(2, "0");
   const yyyy = m[3];
 
-  return `${yyyy}-${mm}-${dd}T00:00:00Z`;
+  // recomendado para SharePoint local (sin Z)
+  return `${yyyy}-${mm}-${dd}T00:00:00`;
 }

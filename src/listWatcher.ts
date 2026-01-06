@@ -4,6 +4,7 @@ import { graphGet } from "./graph";
 import {
   sendMailCambioEstado,
   sendMailComentarioEncargado,
+  type EstadoNotificable,
 } from "./sendMail";
 import fs from "fs";
 import path from "path";
@@ -14,7 +15,10 @@ type ListItem = {
   fields: {
     Title?: string;
     Estadoderevisi_x00f3_n?: string;
-    Solicitante?: string; // email texto
+
+    Solicitante?: string;       // email texto
+    SolicitanteEmail?: string;  // recomendado
+
     Cliente_x002f_Proyecto?: string;
     Fechasolicitada?: string;
     FechaConfirmada?: string;
@@ -23,13 +27,11 @@ type ListItem = {
 };
 
 type EstadoNotificado = {
-  estado?: string;            // último estado notificado (Confirmada/Rechazada)
-  comentario?: string | null; // último comentario notificado
+  estado?: string;
+  comentario?: string | null;
 };
 
-// ======= MEMORIA DE ESTADOS / COMENTARIOS NOTIFICADOS =======
 const ESTADO_FILE = path.resolve(process.cwd(), "estado-notificaciones.json");
-
 let estadoNotificado: Record<string, EstadoNotificado> = {};
 
 try {
@@ -40,7 +42,6 @@ try {
     if (parsed && typeof parsed === "object") {
       for (const [id, val] of Object.entries(parsed as any)) {
         if (typeof val === "string") {
-          // compatibilidad con versión antigua: solo guardaba el estado
           estadoNotificado[id] = { estado: val };
         } else {
           estadoNotificado[id] = val as EstadoNotificado;
@@ -61,6 +62,35 @@ function saveEstadoNotificado() {
   }
 }
 
+function normalizeEstado(raw: unknown): {
+  raw: string;
+  norm: string;
+  isConfirmada: boolean;
+  isRechazada: boolean;
+  isFechaModificada: boolean;
+  estadoParaCorreo: EstadoNotificable | null;
+} {
+  const s = String(raw ?? "").trim();
+  const n = s.toLowerCase();
+
+  const isConfirmada = n === "confirmada" || n === "confirmado";
+  const isRechazada = n === "rechazada" || n === "rechazado";
+  const isFechaModificada =
+    n === "fecha modificada" ||
+    n === "fecha_modificada" ||
+    n === "fechamodificada";
+
+  const estadoParaCorreo: EstadoNotificable | null = isConfirmada
+    ? "Confirmada"
+    : isRechazada
+      ? "Rechazada"
+      : isFechaModificada
+        ? "Fecha modificada"
+        : null;
+
+  return { raw: s, norm: n, isConfirmada, isRechazada, isFechaModificada, estadoParaCorreo };
+}
+
 export async function processEstadoListOnce() {
   const res = await graphGet<{ value: ListItem[] }>(
     `/sites/${cfg.siteId}/lists/${cfg.listId}/items?$expand=fields&$top=500`
@@ -71,8 +101,7 @@ export async function processEstadoListOnce() {
   for (const item of res.value) {
     const id = item.id;
     const f = item.fields || {};
-    const estado = f.Estadoderevisi_x00f3_n || "";
-    const email = (f.Solicitante || "").trim().toLowerCase();
+
     const titulo = f.Title || `Solicitud #${id}`;
     const cliente = f.Cliente_x002f_Proyecto;
     const fechaSolicitada = f.Fechasolicitada;
@@ -80,33 +109,40 @@ export async function processEstadoListOnce() {
     const comentario = f.Comentariodelencargado;
     const webUrl = item.webUrl;
 
-    if (!email) continue;
+    const email = String(f.SolicitanteEmail ?? f.Solicitante ?? "")
+      .trim()
+      .toLowerCase();
 
-    const previo: EstadoNotificado = estadoNotificado[id] || {};
-    const estadoPrevio = previo.estado || "";
-    const comentarioPrevio = (previo.comentario || "").trim();
-    const comentarioActual = (comentario || "").trim();
+    if (!email || !email.includes("@")) continue;
 
-    const nuevo: EstadoNotificado = { ...previo };
+    const prev = estadoNotificado[id] || {};
+    const estadoPrevio = String(prev.estado ?? "");
 
-    // 1) Notificación por cambio de estado (solo Confirmada / Rechazada)
-    if ((estado === "Confirmada" || estado === "Rechazada") && estadoPrevio !== estado) {
+    const comentarioPrevio = String(prev.comentario ?? "").trim();
+    const comentarioActual = String(comentario ?? "").trim();
+
+    const nuevo: EstadoNotificado = { ...prev };
+
+    const estadoInfo = normalizeEstado(f.Estadoderevisi_x00f3_n);
+
+    // ✅ 1) Notificación por cambio de estado (Confirmada / Rechazada / Fecha modificada)
+    if (estadoInfo.estadoParaCorreo && estadoPrevio !== estadoInfo.raw) {
       await sendMailCambioEstado({
         to: email,
         titulo,
-        estado: estado as "Confirmada" | "Rechazada",
+        estado: estadoInfo.estadoParaCorreo,
         cliente,
         fechaSolicitada,
         fechaConfirmada,
-        comentarioEncargado: comentario,
+        comentarioEncargado: comentarioActual || undefined,
         webUrl,
       });
 
-      nuevo.estado = estado;
-      console.log(`✉️ Notificación de estado "${estado}" enviada para item ${id}`);
+      nuevo.estado = estadoInfo.raw;
+      console.log(`✉️ Notificación de estado "${estadoInfo.raw}" enviada para item ${id}`);
     }
 
-    // 2) Notificación por nuevo/actualizado comentario del encargado
+    // ✅ 2) Notificación por nuevo/actualizado comentario del encargado
     if (comentarioActual && comentarioActual !== comentarioPrevio) {
       await sendMailComentarioEncargado({
         to: email,
@@ -117,15 +153,13 @@ export async function processEstadoListOnce() {
       });
 
       nuevo.comentario = comentarioActual;
-      console.log(
-        `✉️ Notificación de comentario del encargado enviada para item ${id}`
-      );
+      console.log(`✉️ Notificación de comentario enviada para item ${id}`);
     }
 
-    // si hubo cambios, guardar
+    // guardar cambios si hubo notificación
     if (
       nuevo.estado !== estadoPrevio ||
-      (nuevo.comentario || "").trim() !== comentarioPrevio
+      String(nuevo.comentario ?? "").trim() !== comentarioPrevio
     ) {
       estadoNotificado[id] = nuevo;
     }

@@ -3,7 +3,9 @@ import { graphPost } from "./graph";
 import { cfg } from "./config";
 
 async function sendMailBase(to: string, subject: string, htmlBody: string) {
-  if (!to) return;
+  const cleanTo = String(to ?? "").trim();
+  if (!cleanTo) return;
+
   const body = {
     message: {
       subject,
@@ -13,17 +15,14 @@ async function sendMailBase(to: string, subject: string, htmlBody: string) {
       },
       toRecipients: [
         {
-          emailAddress: { address: to },
+          emailAddress: { address: cleanTo },
         },
       ],
     },
     saveToSentItems: true,
   };
 
-  await graphPost(
-    `/users/${cfg.mailboxUserId}/sendMail`,
-    body
-  );
+  await graphPost(`/users/${cfg.mailboxUserId}/sendMail`, body);
 }
 
 // 🔹 correo cuando se crea la solicitud
@@ -59,11 +58,13 @@ export async function sendMailNuevaSolicitud(params: {
   await sendMailBase(to, subject, html);
 }
 
-// 🔹 correo cuando cambia el estado (Confirmada / Rechazada)
+export type EstadoNotificable = "Confirmada" | "Rechazada" | "Fecha modificada";
+
+// 🔹 correo cuando cambia el estado (Confirmada / Rechazada / Fecha modificada)
 export async function sendMailCambioEstado(params: {
   to: string;
   titulo: string;
-  estado: "Confirmada" | "Rechazada";
+  estado: EstadoNotificable;
   cliente?: string;
   fechaSolicitada?: string;
   fechaConfirmada?: string;
@@ -84,11 +85,18 @@ export async function sendMailCambioEstado(params: {
   const subject =
     estado === "Confirmada"
       ? `Tu solicitud "${titulo}" ha sido CONFIRMADA`
-      : `Tu solicitud "${titulo}" ha sido RECHAZADA`;
+      : estado === "Rechazada"
+        ? `Tu solicitud "${titulo}" ha sido RECHAZADA`
+        : `Tu solicitud "${titulo}" tiene FECHA MODIFICADA`;
+
+  const textoEstado =
+    estado === "Fecha modificada"
+      ? `El encargado ha modificado la fecha de tu solicitud.`
+      : `El estado de tu solicitud ha cambiado a: <strong>${estado}</strong>.`;
 
   const html = `
     <p>Hola,</p>
-    <p>El estado de tu solicitud ha cambiado a: <strong>${estado}</strong>.</p>
+    <p>${textoEstado}</p>
     <ul>
       <li><strong>Título:</strong> ${titulo}</li>
       <li><strong>Cliente/Proyecto:</strong> ${cliente || "No especificado"}</li>
@@ -132,14 +140,12 @@ export async function sendMailComentarioEncargado(params: {
     <p>El encargado ha agregado/modificado un comentario en tu solicitud.</p>
     <ul>
       <li><strong>Título:</strong> ${titulo}</li>
-      <li><strong>Cliente/Proyecto:</strong> ${
-        cliente || "No especificado"
-      }</li>
+      <li><strong>Cliente/Proyecto:</strong> ${cliente || "No especificado"}</li>
     </ul>
     ${
       comentarioEncargado
         ? `<p><strong>Comentario del encargado:</strong><br/>${comentarioEncargado.replace(
-            /\n/g,
+            /\r?\n/g,
             "<br/>"
           )}</p>`
         : ""

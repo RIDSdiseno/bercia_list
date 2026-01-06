@@ -1,8 +1,9 @@
+// src/server.ts
 import express from "express";
 import { cfg } from "./config";
 import { processInboxOnce, processSimulatedMail } from "./mailProcessor";
 import { getRequiredColumns } from "./debugColumns";
-import { processEstadoListOnce } from "./listWatcher"; // 👈 NUEVO
+import { processEstadoListOnce } from "./listWatcher";
 
 const app = express();
 app.use(express.json());
@@ -13,10 +14,8 @@ app.get("/health", (_, res) => res.json({ ok: true }));
 // Fuerza una corrida inmediata del polling
 app.post("/run-now", async (_, res) => {
   try {
-    // 👇 ahora corre ambas cosas: correos + estado lista
     await processInboxOnce();
     await processEstadoListOnce();
-
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e?.message || String(e) });
@@ -48,16 +47,34 @@ app.listen(8080, () => {
   console.log("Server running on http://localhost:8080");
 });
 
-// Loop de polling
-setInterval(() => {
-  // 👇 lee correos y crea LIST
-  processInboxOnce().catch(err =>
-    console.error("Polling correo error:", err?.message || err)
-  );
+// ======================
+// Loop de polling (con lock)
+// ======================
+let runningInbox = false;
+let runningEstado = false;
 
-  // 👇 revisa cambios de estado en la lista y manda correos de Confirmada/Rechazada
-  processEstadoListOnce().catch(err =>
-    console.error("Polling estado lista error:", err?.message || err)
-  );
-  
-}, cfg.pollIntervalMs);
+const pollMs = Number(cfg.pollIntervalMs) || 60_000;
+
+setInterval(async () => {
+  if (!runningInbox) {
+    runningInbox = true;
+    try {
+      await processInboxOnce();
+    } catch (err: any) {
+      console.error("Polling correo error:", err?.message || err);
+    } finally {
+      runningInbox = false;
+    }
+  }
+
+  if (!runningEstado) {
+    runningEstado = true;
+    try {
+      await processEstadoListOnce();
+    } catch (err: any) {
+      console.error("Polling estado lista error:", err?.message || err);
+    } finally {
+      runningEstado = false;
+    }
+  }
+}, pollMs);
