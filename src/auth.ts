@@ -1,5 +1,5 @@
 import { ConfidentialClientApplication } from "@azure/msal-node";
-import { cfg } from "./config";
+import { cfg } from "./config.js";
 import fs from "fs";
 import path from "path";
 

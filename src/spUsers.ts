@@ -1,5 +1,5 @@
 import axios from "axios";
-import { getSharePointToken } from "./auth";
+import { getSharePointToken } from "./auth.js";
 
 function buildClaims(email: string) {
   return `i:0#.f|membership|${email.trim().toLowerCase()}`;

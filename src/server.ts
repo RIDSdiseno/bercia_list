@@ -1,9 +1,9 @@
 // src/server.ts
 import express from "express";
-import { cfg } from "./config";
-import { processInboxOnce, processSimulatedMail } from "./mailProcessor";
-import { getRequiredColumns } from "./debugColumns";
-import { processEstadoListOnce } from "./listWatcher";
+import { cfg } from "./config.js";
+import { processInboxOnce, processSimulatedMail } from "./mailProcessor.js";
+import { getRequiredColumns } from "./debugColumns.js";
+import { processEstadoListOnce } from "./listWatcher.js";
 
 const app = express();
 app.use(express.json());

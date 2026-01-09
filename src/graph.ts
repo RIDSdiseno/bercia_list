@@ -1,5 +1,5 @@
 import axios from "axios";
-import { getGraphToken } from "./auth";
+import { getGraphToken } from "./auth.js";
 
 const base = "https://graph.microsoft.com/v1.0";
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";

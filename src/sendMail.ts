@@ -1,6 +1,6 @@
 // src/sendMail.ts
-import { graphPost } from "./graph";
-import { cfg } from "./config";
+import { graphPost } from "./graph.js";
+import { cfg } from "./config.js";
 
 async function sendMailBase(to: string, subject: string, htmlBody: string) {
   const cleanTo = String(to ?? "").trim();

@@ -1,11 +1,11 @@
 // src/listWatcher.ts
-import { cfg } from "./config";
-import { graphGet } from "./graph";
+import { cfg } from "./config.js";
+import { graphGet } from "./graph.js";
 import {
   sendMailCambioEstado,
   sendMailComentarioEncargado,
   type EstadoNotificable,
-} from "./sendMail";
+} from "./sendMail.js";
 import fs from "fs";
 import path from "path";
 
