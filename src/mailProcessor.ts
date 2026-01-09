@@ -212,7 +212,8 @@ export async function processInboxOnce() {
       Title: m.subject || "Solicitud",
       Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
       Observaciones: parsed.observaciones || "Sin observaciones",
-      Estadoderevisi_x00f3_n: "Pendiente",
+      Estadoderevisi_x00f3_n: fechaConfirmadaValue ? "Confirmada" : "Pendiente",
+
 
       // ✅ texto
       Solicitante: solicitanteMail || "",
