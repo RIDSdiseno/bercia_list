@@ -1,13 +1,15 @@
 // src/mailProcessor.ts
-import { cfg } from "./config";
-import { graphGet } from "./graph";
-import { createListItem } from "./sharepoint";
-import { parseMail } from "./parser";
-import { sendMailNuevaSolicitud } from "./sendMail";
-import { getSiteUserLookupId } from "./spUsers";
-import { spSetResponsables } from "./spList";
-import fs from "fs";
-import path from "path";
+import { cfg } from "./config.js";
+import { graphGet } from "./graph.js";
+import { createListItem } from "./sharepoint.js";
+import { parseMail } from "./parser.js";
+import { sendMailNuevaSolicitud } from "./sendMail.js";
+import { getSiteUserLookupId } from "./spUsers.js";
+import { spSetResponsables } from "./spList.js";
+
+import fs from "node:fs";
+import path from "node:path";
+
 
 type EmailAddress = { address?: string; name?: string };
 type Recipient = { emailAddress?: EmailAddress };
