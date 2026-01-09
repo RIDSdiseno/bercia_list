@@ -10,7 +10,6 @@ import { spSetResponsables } from "./spList.js";
 import fs from "node:fs";
 import path from "node:path";
 
-
 type EmailAddress = { address?: string; name?: string };
 type Recipient = { emailAddress?: EmailAddress };
 
@@ -22,6 +21,17 @@ type Msg = {
   body?: { contentType?: string; content?: string };
   isRead?: boolean;
 };
+
+// ================== NORMALIZADOR (no tildes / no mayúsculas) ==================
+function norm(input: unknown): string {
+  return String(input ?? "")
+    .normalize("NFD") // separa letras/tildes
+    .replace(/[\u0300-\u036f]/g, "") // elimina tildes
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " "); // colapsa espacios
+}
+// ============================================================================
 
 // ================== ANTI-DUPLICADOS ==================
 const PROCESSED_FILE = path.resolve(process.cwd(), "processed-mails.json");
@@ -49,42 +59,65 @@ function markProcessed(id: string) {
 }
 // =====================================================
 
-const TIPOS_VALIDOS = new Set([
+// ✅ Set en versión NORMALIZADA (sin tildes) para comparación exacta
+const TIPOS_VALIDOS_NORM = new Set([
   "envio",
   "instalacion",
-  "Cubicación por planos",
-  "Cubicación en terreno",
-  "Costeo de proyecto",
-  "Productos (requerimientos)",
-  "Evaluación postventa",
-  "Post venta en terreno",
-  "Producto interno",
+  "cubicacion por planos",
+  "cubicacion en terreno",
+  "costeo de proyecto",
+  "productos (requerimientos)",
+  "evaluacion postventa",
+  "post venta en terreno",
+  "producto interno",
 ]);
+
+// ✅ Mapa: clave normalizada -> valor “bonito” para SharePoint
+const TIPOS_MAP: Record<string, string> = {
+  envio: "envio",
+  instalacion: "instalacion",
+  "cubicacion por planos": "Cubicación por planos",
+  "cubicacion en terreno": "Cubicación en terreno",
+  "costeo de proyecto": "Costeo de proyecto",
+  "productos (requerimientos)": "Productos (requerimientos)",
+  "evaluacion postventa": "Evaluación postventa",
+  "post venta en terreno": "Post venta en terreno",
+  "producto interno": "Producto interno",
+};
 
 function normalizeTipodetarea(raw?: string) {
   if (!raw) return null;
-  const s = raw.trim();
-  const lower = s.toLowerCase();
 
-  if (lower.includes("env")) return "envio";
-  if (lower.includes("instal")) return "instalacion";
-  if (lower.includes("postventa")) return "Evaluación postventa";
-  if (lower.includes("producto interno")) return "Producto interno";
-  if (lower.includes("costeo")) return "Costeo de proyecto";
-  if (lower.includes("planos")) return "Cubicación por planos";
-  if (lower.includes("terreno")) return "Cubicación en terreno";
-  if (lower.includes("requer")) return "Productos (requerimientos)";
+  const s = norm(raw);
 
-  if (TIPOS_VALIDOS.has(s)) return s;
+  // 🟦 Match por “contiene” (tolerante)
+  if (s.includes("env")) return "envio";
+  if (s.includes("instal")) return "instalacion";
+  if (s.includes("postventa")) return "Evaluación postventa";
+  if (s.includes("producto interno")) return "Producto interno";
+  if (s.includes("costeo")) return "Costeo de proyecto";
+  if (s.includes("plano")) return "Cubicación por planos";
+  if (s.includes("terreno")) return "Cubicación en terreno";
+  if (s.includes("requer")) return "Productos (requerimientos)";
+
+  // 🟩 Match exacto (normalizado)
+  if (TIPOS_VALIDOS_NORM.has(s)) {
+    return TIPOS_MAP[s] ?? null;
+  }
+
   return null;
 }
 
 function normalizePrioridad(raw?: string) {
   if (!raw) return null;
-  const s = raw.trim().toLowerCase();
+
+  const s = norm(raw);
+
+  // Alta / Media / Baja, también acepta "A", "M", "B", "Alta urgencia", "MÉDIA", etc.
   if (s.startsWith("a")) return "Alta";
   if (s.startsWith("m")) return "Media";
   if (s.startsWith("b")) return "Baja";
+
   return null;
 }
 
@@ -143,10 +176,13 @@ export async function processInboxOnce() {
   for (const m of res.value) {
     if (processedIds.has(m.id)) continue;
 
-    const subjectLower = (m.subject || "").toLowerCase();
+    const subjectLower = norm(m.subject || "");
     if (!subjectLower.includes("list")) continue;
 
-    const fromEmail = m.from?.emailAddress?.address?.trim().toLowerCase() || "";
+    const fromEmail = String(m.from?.emailAddress?.address ?? "")
+      .trim()
+      .toLowerCase();
+
     const solicitanteMail = fromEmail;
 
     const responsablesMails = Array.from(
@@ -248,8 +284,8 @@ async function resolveFolderIdByName() {
 
   const match = folders.value.find(
     (f) =>
-      (f.displayName || "").toLowerCase() ===
-      cfg.targetFolderPath.toLowerCase()
+      String(f.displayName || "").trim().toLowerCase() ===
+      String(cfg.targetFolderPath || "").trim().toLowerCase()
   );
 
   if (!match?.id) {
@@ -368,7 +404,7 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
 }
 
 function normalizeDate(input: string) {
-  const s = input.trim();
+  const s = String(input ?? "").trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s;
 
   const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
