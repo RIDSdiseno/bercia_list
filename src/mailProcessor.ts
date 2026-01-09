@@ -25,15 +25,15 @@ type Msg = {
 // ================== NORMALIZADOR (no tildes / no mayúsculas) ==================
 function norm(input: unknown): string {
   return String(input ?? "")
-    .normalize("NFD") // separa letras/tildes
-    .replace(/[\u0300-\u036f]/g, "") // elimina tildes
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, " "); // colapsa espacios
+    .replace(/\s+/g, " ");
 }
 // ============================================================================
 
-// ================== ANTI-DUPLICADOS ==================
+// ================== ANTI-DUPLICADOS (LOCAL) ==================
 const PROCESSED_FILE = path.resolve(process.cwd(), "processed-mails.json");
 
 let processedIds = new Set<string>();
@@ -57,7 +57,7 @@ function markProcessed(id: string) {
     console.warn("⚠️ No pude guardar processed-mails.json");
   }
 }
-// =====================================================
+// ============================================================
 
 // ✅ Set en versión NORMALIZADA (sin tildes) para comparación exacta
 const TIPOS_VALIDOS_NORM = new Set([
@@ -90,7 +90,7 @@ function normalizeTipodetarea(raw?: string) {
 
   const s = norm(raw);
 
-  // 🟦 Match por “contiene” (tolerante)
+  // Match por “contiene”
   if (s.includes("env")) return "envio";
   if (s.includes("instal")) return "instalacion";
   if (s.includes("postventa")) return "Evaluación postventa";
@@ -100,7 +100,7 @@ function normalizeTipodetarea(raw?: string) {
   if (s.includes("terreno")) return "Cubicación en terreno";
   if (s.includes("requer")) return "Productos (requerimientos)";
 
-  // 🟩 Match exacto (normalizado)
+  // Match exacto (normalizado)
   if (TIPOS_VALIDOS_NORM.has(s)) {
     return TIPOS_MAP[s] ?? null;
   }
@@ -113,7 +113,6 @@ function normalizePrioridad(raw?: string) {
 
   const s = norm(raw);
 
-  // Alta / Media / Baja, también acepta "A", "M", "B", "Alta urgencia", "MÉDIA", etc.
   if (s.startsWith("a")) return "Alta";
   if (s.startsWith("m")) return "Media";
   if (s.startsWith("b")) return "Baja";
@@ -179,6 +178,14 @@ export async function processInboxOnce() {
     const subjectLower = norm(m.subject || "");
     if (!subjectLower.includes("list")) continue;
 
+    // ✅ LOG DIAGNÓSTICO ANTI-DUPLICADOS
+    console.log("📩 procesando mail:", {
+      id: m.id,
+      subject: m.subject,
+      instance: process.env.HOSTNAME || process.pid,
+      at: new Date().toISOString(),
+    });
+
     const fromEmail = String(m.from?.emailAddress?.address ?? "")
       .trim()
       .toLowerCase();
@@ -212,8 +219,9 @@ export async function processInboxOnce() {
       Title: m.subject || "Solicitud",
       Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
       Observaciones: parsed.observaciones || "Sin observaciones",
-      Estadoderevisi_x00f3_n: fechaConfirmadaValue ? "Confirmada" : "Pendiente",
 
+      // ✅ si viene fecha confirmada en el mail => Confirmada
+      Estadoderevisi_x00f3_n: fechaConfirmadaValue ? "Confirmada" : "Pendiente",
 
       // ✅ texto
       Solicitante: solicitanteMail || "",
@@ -317,6 +325,14 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     throw new Error("from (email) es obligatorio y debe ser válido");
   }
 
+  // ✅ LOG DIAGNÓSTICO (test)
+  console.log("🧪 simulando mail:", {
+    subject,
+    fromEmail,
+    instance: process.env.HOSTNAME || process.pid,
+    at: new Date().toISOString(),
+  });
+
   const solicitanteMail = fromEmail;
 
   const responsablesMails = Array.from(
@@ -346,7 +362,9 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
     Title: subject || "Solicitud",
     Cliente_x002f_Proyecto: parsed.clienteProyecto || "Sin cliente",
     Observaciones: parsed.observaciones || "Sin observaciones",
-    Estadoderevisi_x00f3_n: "Pendiente",
+
+    // ✅ si viene fecha confirmada en el body => Confirmada
+    Estadoderevisi_x00f3_n: fechaConfirmadaValue ? "Confirmada" : "Pendiente",
 
     Solicitante: solicitanteMail || "",
     Responsable: responsablesMails.join("; "),
@@ -371,36 +389,7 @@ export async function processSimulatedMail(input: SimulatedMailInput) {
   }
 
   const created = await createListItem(fields);
-  const itemId = Number((created as any)?.id);
-  const itemUrl: string | undefined = (created as any)?.webUrl;
-
-  if (Number.isFinite(itemId) && responsablesMails.length) {
-    const responsablesIds: number[] = [];
-    for (const mail of responsablesMails) {
-      try {
-        const rid = await getSiteUserLookupId(mail, webUrl);
-        if (rid && !responsablesIds.includes(rid)) responsablesIds.push(rid);
-      } catch {
-        console.warn("⚠️ Responsable no resolvió como persona (test):", mail);
-      }
-    }
-    if (responsablesIds.length) {
-      await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
-    }
-  }
-
-  if (solicitanteMail) {
-    await sendMailNuevaSolicitud({
-      to: solicitanteMail,
-      titulo: fields.Title,
-      cliente: fields.Cliente_x002f_Proyecto,
-      fechaSolicitada: fields.Fechasolicitada,
-      tipodetarea: fields.Tipodetarea,
-      webUrl: itemUrl,
-    });
-  }
-
-  console.log("🧪 [test-create] Item creado + correo enviado:", subject);
+  console.log("🧪 [test-create] Item creado:", subject);
   return created;
 }
 
@@ -415,6 +404,5 @@ function normalizeDate(input: string) {
   const mm = m[2].padStart(2, "0");
   const yyyy = m[3];
 
-  // recomendado para SharePoint local (sin Z)
   return `${yyyy}-${mm}-${dd}T00:00:00`;
 }
