@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.parseMail = parseMail;
-function parseMail(bodyText) {
+export function parseMail(bodyText) {
     const lines = bodyText
         .replace(/\r/g, "")
         .split("\n")

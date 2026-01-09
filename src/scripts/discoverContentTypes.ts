@@ -1,5 +1,5 @@
-import { graphGet } from "../graph";
-import { cfg } from "../config";
+import { graphGet } from "../graph.js";
+import { cfg } from "../config.js";
 
 (async () => {
   const res = await graphGet<{ value: any[] }>(

@@ -1,26 +1,19 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.processInboxOnce = processInboxOnce;
-exports.processSimulatedMail = processSimulatedMail;
 // src/mailProcessor.ts
-const config_1 = require("./config");
-const graph_1 = require("./graph");
-const sharepoint_1 = require("./sharepoint");
-const parser_1 = require("./parser");
-const sendMail_1 = require("./sendMail");
-const spUsers_1 = require("./spUsers");
-const spList_1 = require("./spList");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
+import { cfg } from "./config.js";
+import { graphGet } from "./graph.js";
+import { createListItem } from "./sharepoint.js";
+import { parseMail } from "./parser.js";
+import { sendMailNuevaSolicitud } from "./sendMail.js";
+import { getSiteUserLookupId } from "./spUsers.js";
+import { spSetResponsables } from "./spList.js";
+import fs from "node:fs";
+import path from "node:path";
 // ================== ANTI-DUPLICADOS ==================
-const PROCESSED_FILE = path_1.default.resolve(process.cwd(), "processed-mails.json");
+const PROCESSED_FILE = path.resolve(process.cwd(), "processed-mails.json");
 let processedIds = new Set();
 try {
-    if (fs_1.default.existsSync(PROCESSED_FILE)) {
-        const raw = fs_1.default.readFileSync(PROCESSED_FILE, "utf8");
+    if (fs.existsSync(PROCESSED_FILE)) {
+        const raw = fs.readFileSync(PROCESSED_FILE, "utf8");
         const arr = JSON.parse(raw);
         if (Array.isArray(arr))
             processedIds = new Set(arr.filter(Boolean));
@@ -34,7 +27,7 @@ catch {
 function markProcessed(id) {
     processedIds.add(id);
     try {
-        fs_1.default.writeFileSync(PROCESSED_FILE, JSON.stringify([...processedIds], null, 2));
+        fs.writeFileSync(PROCESSED_FILE, JSON.stringify([...processedIds], null, 2));
     }
     catch {
         console.warn("⚠️ No pude guardar processed-mails.json");
@@ -122,12 +115,12 @@ function htmlToText(html) {
     return lines.join("\n");
 }
 // ====== MAIN POLLING ======
-async function processInboxOnce() {
+export async function processInboxOnce() {
     const folderId = await resolveFolderIdByName();
-    const res = await (0, graph_1.graphGet)(`/users/${config_1.cfg.mailboxUserId}/mailFolders/${folderId}/messages?$top=25`);
+    const res = await graphGet(`/users/${cfg.mailboxUserId}/mailFolders/${folderId}/messages?$top=25`);
     if (!res.value?.length)
         return;
-    const site = await (0, graph_1.graphGet)(`/sites/${config_1.cfg.siteId}`);
+    const site = await graphGet(`/sites/${cfg.siteId}`);
     const webUrl = site?.webUrl;
     if (!webUrl)
         throw new Error("No pude obtener webUrl del sitio");
@@ -143,11 +136,11 @@ async function processInboxOnce() {
             .map((r) => r.emailAddress?.address)
             .filter((mail) => typeof mail === "string")
             .map((mail) => mail.trim().toLowerCase())
-            .filter((mail) => mail !== config_1.cfg.adminEmail)
+            .filter((mail) => mail !== cfg.adminEmail)
             .filter((mail) => mail !== solicitanteMail)));
         const bodyHtml = m.body?.content || "";
         const bodyText = htmlToText(bodyHtml);
-        const parsed = (0, parser_1.parseMail)(bodyText);
+        const parsed = parseMail(bodyText);
         const fechaSolicitadaValue = parsed.fechaSolicitada
             ? normalizeDate(parsed.fechaSolicitada)
             : nowForSharePoint();
@@ -173,7 +166,7 @@ async function processInboxOnce() {
         // Solicitante persona
         try {
             if (solicitanteMail) {
-                const solicitanteId = await (0, spUsers_1.getSiteUserLookupId)(solicitanteMail, webUrl);
+                const solicitanteId = await getSiteUserLookupId(solicitanteMail, webUrl);
                 if (solicitanteId)
                     fields.Solicitante0LookupId = solicitanteId;
             }
@@ -181,7 +174,7 @@ async function processInboxOnce() {
         catch {
             console.warn("⚠️ No se pudo resolver solicitante como persona:", solicitanteMail);
         }
-        const created = await (0, sharepoint_1.createListItem)(fields);
+        const created = await createListItem(fields);
         const itemId = Number(created?.id);
         const itemUrl = created?.webUrl;
         // set multi-persona Responsables
@@ -189,7 +182,7 @@ async function processInboxOnce() {
             const responsablesIds = [];
             for (const mail of responsablesMails) {
                 try {
-                    const rid = await (0, spUsers_1.getSiteUserLookupId)(mail, webUrl);
+                    const rid = await getSiteUserLookupId(mail, webUrl);
                     if (rid && !responsablesIds.includes(rid))
                         responsablesIds.push(rid);
                 }
@@ -198,12 +191,12 @@ async function processInboxOnce() {
                 }
             }
             if (responsablesIds.length) {
-                await (0, spList_1.spSetResponsables)(webUrl, config_1.cfg.listId, itemId, responsablesIds);
+                await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
             }
         }
         // mail al solicitante
         if (solicitanteMail) {
-            await (0, sendMail_1.sendMailNuevaSolicitud)({
+            await sendMailNuevaSolicitud({
                 to: solicitanteMail,
                 titulo: fields.Title,
                 cliente: fields.Cliente_x002f_Proyecto,
@@ -217,15 +210,15 @@ async function processInboxOnce() {
     }
 }
 async function resolveFolderIdByName() {
-    const folders = await (0, graph_1.graphGet)(`/users/${config_1.cfg.mailboxUserId}/mailFolders?$top=250`);
+    const folders = await graphGet(`/users/${cfg.mailboxUserId}/mailFolders?$top=250`);
     const match = folders.value.find((f) => (f.displayName || "").toLowerCase() ===
-        config_1.cfg.targetFolderPath.toLowerCase());
+        cfg.targetFolderPath.toLowerCase());
     if (!match?.id) {
-        throw new Error(`No encontré carpeta "${config_1.cfg.targetFolderPath}". Revisa TARGET_FOLDER_PATH.`);
+        throw new Error(`No encontré carpeta "${cfg.targetFolderPath}". Revisa TARGET_FOLDER_PATH.`);
     }
     return match.id;
 }
-async function processSimulatedMail(input) {
+export async function processSimulatedMail(input) {
     const subject = (input.subject || "").trim();
     const fromEmail = (input.from || "").trim().toLowerCase();
     const ccMailsRaw = (input.cc || []).map((x) => (x || "").trim().toLowerCase());
@@ -237,11 +230,11 @@ async function processSimulatedMail(input) {
     }
     const solicitanteMail = fromEmail;
     const responsablesMails = Array.from(new Set(ccMailsRaw
-        .filter((mail) => mail !== config_1.cfg.adminEmail)
+        .filter((mail) => mail !== cfg.adminEmail)
         .filter((mail) => mail !== solicitanteMail)));
     const bodyText = htmlToText(bodyRaw);
-    const parsed = (0, parser_1.parseMail)(bodyText);
-    const site = await (0, graph_1.graphGet)(`/sites/${config_1.cfg.siteId}`);
+    const parsed = parseMail(bodyText);
+    const site = await graphGet(`/sites/${cfg.siteId}`);
     const webUrl = site?.webUrl;
     if (!webUrl)
         throw new Error("No pude obtener webUrl del sitio");
@@ -267,21 +260,21 @@ async function processSimulatedMail(input) {
     if (prioOk)
         fields.Prioridad = prioOk;
     try {
-        const solicitanteId = await (0, spUsers_1.getSiteUserLookupId)(solicitanteMail, webUrl);
+        const solicitanteId = await getSiteUserLookupId(solicitanteMail, webUrl);
         if (solicitanteId)
             fields.Solicitante0LookupId = solicitanteId;
     }
     catch {
         console.warn("⚠️ No se pudo resolver solicitante como persona (test):", solicitanteMail);
     }
-    const created = await (0, sharepoint_1.createListItem)(fields);
+    const created = await createListItem(fields);
     const itemId = Number(created?.id);
     const itemUrl = created?.webUrl;
     if (Number.isFinite(itemId) && responsablesMails.length) {
         const responsablesIds = [];
         for (const mail of responsablesMails) {
             try {
-                const rid = await (0, spUsers_1.getSiteUserLookupId)(mail, webUrl);
+                const rid = await getSiteUserLookupId(mail, webUrl);
                 if (rid && !responsablesIds.includes(rid))
                     responsablesIds.push(rid);
             }
@@ -290,11 +283,11 @@ async function processSimulatedMail(input) {
             }
         }
         if (responsablesIds.length) {
-            await (0, spList_1.spSetResponsables)(webUrl, config_1.cfg.listId, itemId, responsablesIds);
+            await spSetResponsables(webUrl, cfg.listId, itemId, responsablesIds);
         }
     }
     if (solicitanteMail) {
-        await (0, sendMail_1.sendMailNuevaSolicitud)({
+        await sendMailNuevaSolicitud({
             to: solicitanteMail,
             titulo: fields.Title,
             cliente: fields.Cliente_x002f_Proyecto,

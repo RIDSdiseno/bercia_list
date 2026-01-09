@@ -1,6 +1,6 @@
 // src/sharepoint.ts
-import { graphPost } from "./graph";
-import { cfg } from "./config";
+import { graphPost } from "./graph.js";
+import { cfg } from "./config.js";
 
 /** Helper genérico para crear items en cualquier lista */
 export async function createListItem(fields: any) {

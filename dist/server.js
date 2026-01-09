@@ -1,23 +1,18 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
 // src/server.ts
-const express_1 = __importDefault(require("express"));
-const config_1 = require("./config");
-const mailProcessor_1 = require("./mailProcessor");
-const debugColumns_1 = require("./debugColumns");
-const listWatcher_1 = require("./listWatcher");
-const app = (0, express_1.default)();
-app.use(express_1.default.json());
+import express from "express";
+import { cfg } from "./config.js";
+import { processInboxOnce, processSimulatedMail } from "./mailProcessor.js";
+import { getRequiredColumns } from "./debugColumns.js";
+import { processEstadoListOnce } from "./listWatcher.js";
+const app = express();
+app.use(express.json());
 // Healthcheck simple
 app.get("/health", (_, res) => res.json({ ok: true }));
 // Fuerza una corrida inmediata del polling
 app.post("/run-now", async (_, res) => {
     try {
-        await (0, mailProcessor_1.processInboxOnce)();
-        await (0, listWatcher_1.processEstadoListOnce)();
+        await processInboxOnce();
+        await processEstadoListOnce();
         res.json({ ok: true });
     }
     catch (e) {
@@ -27,7 +22,7 @@ app.post("/run-now", async (_, res) => {
 // Simula un correo desde Postman
 app.post("/test-create", async (req, res) => {
     try {
-        const created = await (0, mailProcessor_1.processSimulatedMail)(req.body);
+        const created = await processSimulatedMail(req.body);
         res.json({ ok: true, created });
     }
     catch (e) {
@@ -38,7 +33,7 @@ app.post("/test-create", async (req, res) => {
 // Debug columns
 app.get("/debug-columns", async (_, res) => {
     try {
-        const cols = await (0, debugColumns_1.getRequiredColumns)();
+        const cols = await getRequiredColumns();
         res.json(cols);
     }
     catch (e) {
@@ -53,12 +48,12 @@ app.listen(8080, () => {
 // ======================
 let runningInbox = false;
 let runningEstado = false;
-const pollMs = Number(config_1.cfg.pollIntervalMs) || 60_000;
+const pollMs = Number(cfg.pollIntervalMs) || 60_000;
 setInterval(async () => {
     if (!runningInbox) {
         runningInbox = true;
         try {
-            await (0, mailProcessor_1.processInboxOnce)();
+            await processInboxOnce();
         }
         catch (err) {
             console.error("Polling correo error:", err?.message || err);
@@ -70,7 +65,7 @@ setInterval(async () => {
     if (!runningEstado) {
         runningEstado = true;
         try {
-            await (0, listWatcher_1.processEstadoListOnce)();
+            await processEstadoListOnce();
         }
         catch (err) {
             console.error("Polling estado lista error:", err?.message || err);

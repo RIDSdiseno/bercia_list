@@ -1,11 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendMailNuevaSolicitud = sendMailNuevaSolicitud;
-exports.sendMailCambioEstado = sendMailCambioEstado;
-exports.sendMailComentarioEncargado = sendMailComentarioEncargado;
 // src/sendMail.ts
-const graph_1 = require("./graph");
-const config_1 = require("./config");
+import { graphPost } from "./graph.js";
+import { cfg } from "./config.js";
 async function sendMailBase(to, subject, htmlBody) {
     const cleanTo = String(to ?? "").trim();
     if (!cleanTo)
@@ -25,10 +20,10 @@ async function sendMailBase(to, subject, htmlBody) {
         },
         saveToSentItems: true,
     };
-    await (0, graph_1.graphPost)(`/users/${config_1.cfg.mailboxUserId}/sendMail`, body);
+    await graphPost(`/users/${cfg.mailboxUserId}/sendMail`, body);
 }
 // 🔹 correo cuando se crea la solicitud
-async function sendMailNuevaSolicitud(params) {
+export async function sendMailNuevaSolicitud(params) {
     const { to, titulo, cliente, fechaSolicitada, tipodetarea, webUrl } = params;
     const subject = `Tu solicitud "${titulo}" ha sido creada`;
     const html = `
@@ -48,7 +43,7 @@ async function sendMailNuevaSolicitud(params) {
     await sendMailBase(to, subject, html);
 }
 // 🔹 correo cuando cambia el estado (Confirmada / Rechazada / Fecha modificada)
-async function sendMailCambioEstado(params) {
+export async function sendMailCambioEstado(params) {
     const { to, titulo, estado, cliente, fechaSolicitada, fechaConfirmada, comentarioEncargado, webUrl, } = params;
     const subject = estado === "Confirmada"
         ? `Tu solicitud "${titulo}" ha sido CONFIRMADA`
@@ -80,7 +75,7 @@ async function sendMailCambioEstado(params) {
     await sendMailBase(to, subject, html);
 }
 // 🔹 correo cuando el encargado escribe / modifica su comentario
-async function sendMailComentarioEncargado(params) {
+export async function sendMailComentarioEncargado(params) {
     const { to, titulo, cliente, comentarioEncargado, webUrl } = params;
     const subject = `Nuevo comentario en tu solicitud "${titulo}"`;
     const html = `

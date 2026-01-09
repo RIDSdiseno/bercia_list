@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.cfg = void 0;
 // config.ts (versión simple)
-require("dotenv/config");
-exports.cfg = {
+import "dotenv/config";
+export const cfg = {
     contentTypeId: process.env.CONTENT_TYPE_ID || "",
     tenantId: process.env.BERCIA_TENANT_ID,
     clientId: process.env.BERCIA_CLIENT_ID,
@@ -22,9 +19,9 @@ function req(v, name) {
     if (!v)
         throw new Error(`Falta ${name} en .env`);
 }
-req(exports.cfg.tenantId, "BERCIA_TENANT_ID");
-req(exports.cfg.clientId, "BERCIA_CLIENT_ID");
-req(exports.cfg.clientSecret, "BERCIA_CLIENT_SECRET");
-req(exports.cfg.mailboxUserId, "MAILBOX_USER_ID");
-req(exports.cfg.siteId, "SITE_ID");
-req(exports.cfg.listId, "LIST_ID");
+req(cfg.tenantId, "BERCIA_TENANT_ID");
+req(cfg.clientId, "BERCIA_CLIENT_ID");
+req(cfg.clientSecret, "BERCIA_CLIENT_SECRET");
+req(cfg.mailboxUserId, "MAILBOX_USER_ID");
+req(cfg.siteId, "SITE_ID");
+req(cfg.listId, "LIST_ID");

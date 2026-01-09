@@ -1,10 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getRequiredColumns = getRequiredColumns;
-const graph_1 = require("./graph");
-const config_1 = require("./config");
-async function getRequiredColumns() {
-    const res = await (0, graph_1.graphGet)(`/sites/${config_1.cfg.siteId}/lists/${config_1.cfg.listId}/columns`);
+import { graphGet } from "./graph.js";
+import { cfg } from "./config.js";
+export async function getRequiredColumns() {
+    const res = await graphGet(`/sites/${cfg.siteId}/lists/${cfg.listId}/columns`);
     return res.value.map(c => ({
         name: c.name, // nombre interno Graph
         displayName: c.displayName, // visible

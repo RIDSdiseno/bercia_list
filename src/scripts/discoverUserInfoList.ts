@@ -1,7 +1,7 @@
 import axios from "axios";
-import { cfg } from "../config";          // 👈 OJO: ../ porque estás dentro de scripts
-import { graphGet } from "../graph";
-import { getGraphToken } from "../auth";
+import { cfg } from "../config.js";          // 👈 OJO: ../ porque estás dentro de scripts
+import { graphGet } from "../graph.js";
+import { getGraphToken } from "../auth.js";
 
 async function main() {
   // 1) Intento v1.0 con includeHiddenLists

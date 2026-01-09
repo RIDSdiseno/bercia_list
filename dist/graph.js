@@ -1,13 +1,5 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.graphGet = graphGet;
-exports.graphPost = graphPost;
-exports.graphPatch = graphPatch;
-const axios_1 = __importDefault(require("axios"));
-const auth_1 = require("./auth");
+import axios from "axios";
+import { getGraphToken } from "./auth.js";
 const base = "https://graph.microsoft.com/v1.0";
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 function logError(e, method, url) {
@@ -17,10 +9,10 @@ function logError(e, method, url) {
     if (data)
         console.error("Detalles:", JSON.stringify(data, null, 2));
 }
-async function graphGet(url) {
+export async function graphGet(url) {
     try {
-        const token = await (0, auth_1.getGraphToken)();
-        const { data } = await axios_1.default.get(base + url, {
+        const token = await getGraphToken();
+        const { data } = await axios.get(base + url, {
             headers: { Authorization: `Bearer ${token}` },
         });
         return data;
@@ -30,10 +22,10 @@ async function graphGet(url) {
         throw e;
     }
 }
-async function graphPost(url, body) {
-    const token = await (0, auth_1.getGraphToken)();
+export async function graphPost(url, body) {
+    const token = await getGraphToken();
     try {
-        const { data } = await axios_1.default.post(`${GRAPH_BASE}${url}`, body, {
+        const { data } = await axios.post(`${GRAPH_BASE}${url}`, body, {
             headers: {
                 Authorization: `Bearer ${token}`,
                 "Content-Type": "application/json",
@@ -46,10 +38,10 @@ async function graphPost(url, body) {
         throw e;
     }
 }
-async function graphPatch(url, body) {
+export async function graphPatch(url, body) {
     try {
-        const token = await (0, auth_1.getGraphToken)();
-        await axios_1.default.patch(base + url, body, {
+        const token = await getGraphToken();
+        await axios.patch(base + url, body, {
             headers: { Authorization: `Bearer ${token}` },
         });
     }

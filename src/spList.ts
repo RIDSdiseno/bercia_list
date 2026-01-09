@@ -1,6 +1,6 @@
 // src/spList.ts
 import axios from "axios";
-import { getSharePointToken } from "./auth";
+import { getSharePointToken } from "./auth.js";
 
 /**
  * Setea columna Persona multi usando SharePoint REST con PATCH (odata=nometadata).

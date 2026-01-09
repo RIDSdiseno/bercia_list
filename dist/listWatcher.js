@@ -1,20 +1,14 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.processEstadoListOnce = processEstadoListOnce;
 // src/listWatcher.ts
-const config_1 = require("./config");
-const graph_1 = require("./graph");
-const sendMail_1 = require("./sendMail");
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
-const ESTADO_FILE = path_1.default.resolve(process.cwd(), "estado-notificaciones.json");
+import { cfg } from "./config.js";
+import { graphGet } from "./graph.js";
+import { sendMailCambioEstado, sendMailComentarioEncargado, } from "./sendMail.js";
+import fs from "fs";
+import path from "path";
+const ESTADO_FILE = path.resolve(process.cwd(), "estado-notificaciones.json");
 let estadoNotificado = {};
 try {
-    if (fs_1.default.existsSync(ESTADO_FILE)) {
-        const raw = fs_1.default.readFileSync(ESTADO_FILE, "utf8");
+    if (fs.existsSync(ESTADO_FILE)) {
+        const raw = fs.readFileSync(ESTADO_FILE, "utf8");
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === "object") {
             for (const [id, val] of Object.entries(parsed)) {
@@ -34,7 +28,7 @@ catch {
 }
 function saveEstadoNotificado() {
     try {
-        fs_1.default.writeFileSync(ESTADO_FILE, JSON.stringify(estadoNotificado, null, 2));
+        fs.writeFileSync(ESTADO_FILE, JSON.stringify(estadoNotificado, null, 2));
     }
     catch {
         console.warn("⚠️ No pude guardar estado-notificaciones.json");
@@ -57,8 +51,8 @@ function normalizeEstado(raw) {
                 : null;
     return { raw: s, norm: n, isConfirmada, isRechazada, isFechaModificada, estadoParaCorreo };
 }
-async function processEstadoListOnce() {
-    const res = await (0, graph_1.graphGet)(`/sites/${config_1.cfg.siteId}/lists/${config_1.cfg.listId}/items?$expand=fields&$top=500`);
+export async function processEstadoListOnce() {
+    const res = await graphGet(`/sites/${cfg.siteId}/lists/${cfg.listId}/items?$expand=fields&$top=500`);
     if (!res.value?.length)
         return;
     for (const item of res.value) {
@@ -83,7 +77,7 @@ async function processEstadoListOnce() {
         const estadoInfo = normalizeEstado(f.Estadoderevisi_x00f3_n);
         // ✅ 1) Notificación por cambio de estado (Confirmada / Rechazada / Fecha modificada)
         if (estadoInfo.estadoParaCorreo && estadoPrevio !== estadoInfo.raw) {
-            await (0, sendMail_1.sendMailCambioEstado)({
+            await sendMailCambioEstado({
                 to: email,
                 titulo,
                 estado: estadoInfo.estadoParaCorreo,
@@ -98,7 +92,7 @@ async function processEstadoListOnce() {
         }
         // ✅ 2) Notificación por nuevo/actualizado comentario del encargado
         if (comentarioActual && comentarioActual !== comentarioPrevio) {
-            await (0, sendMail_1.sendMailComentarioEncargado)({
+            await sendMailComentarioEncargado({
                 to: email,
                 titulo,
                 cliente,

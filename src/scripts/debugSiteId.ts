@@ -1,5 +1,5 @@
 // src/debugSiteId.ts
-import { graphGet } from "../graph";
+import { graphGet } from "../graph.js";
 
 async function main() {
   try {
